@@ -14,8 +14,8 @@ the Mac while it runs local LLMs.
 └────────────────────────────────────────────┘
 ```
 
-Each row has a big number and a chart of approximately the last 3 minutes. The
-display updates one time each second. Memory is "Memory Used", the same value
+Each row has a big number and a chart of approximately the last 1.5 minutes. The
+display updates two times each second. Memory is "Memory Used", the same value
 as in Activity Monitor.
 
 The full design is in [design.md](design.md).
@@ -26,7 +26,7 @@ The full design is in [design.md](design.md).
 |---|---|---|
 | `boot.py` | PyPortal | Enables a second USB serial channel for Tach data. |
 | `code.py` | PyPortal | Reads the data and shows the display. |
-| `tach-sender.py` | Mac | Reads CPU, GPU and memory data and sends one line each second. |
+| `tach-sender.py` | Mac | Reads CPU, GPU and memory data and sends one line each 0.5 seconds. |
 
 ## Requirements
 

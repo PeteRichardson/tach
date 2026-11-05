@@ -2,7 +2,7 @@
 """Tach sender: send live Mac performance data to the Tach display.
 
 CPU and GPU come from `macmon pipe`. Memory comes from host_statistics64().
-The script sends one JSON line each second to the PyPortal data port.
+The script sends one JSON line each SEND_INTERVAL_S to the PyPortal data port.
 See design.md, sections 5.1, 6.1 and 7.
 
 Usage:
@@ -22,8 +22,8 @@ import threading
 import time
 
 ADAFRUIT_VID = 0x239A
-SEND_INTERVAL_S = 1.0
-MEM_SAMPLES_PER_SEND = 4  # read memory 4 times each second, send the maximum
+SEND_INTERVAL_S = 0.5
+MEM_SAMPLES_PER_SEND = 4  # read memory 4 times for each message, send the maximum
 MACMON_STALE_S = 5.0
 RETRY_S = 2.0
 GB = 1024 ** 3
@@ -128,6 +128,7 @@ class Macmon(threading.Thread):
         self.gpu = None
         self.updated = 0.0
         self.proc = None
+        self.stopping = threading.Event()
 
     def latest(self):
         with self.lock:
@@ -136,7 +137,7 @@ class Macmon(threading.Thread):
             return self.cpu, self.gpu
 
     def run(self):
-        while True:
+        while not self.stopping.is_set():
             try:
                 self.proc = subprocess.Popen(
                     ["macmon", "pipe", "-i", str(int(SEND_INTERVAL_S * 1000))],
@@ -152,12 +153,15 @@ class Macmon(threading.Thread):
                         self.cpu, self.gpu = cpu, gpu
                         self.updated = time.monotonic()
                 code = self.proc.wait()
+                if self.stopping.is_set():
+                    return  # stop() ended macmon: not an error
                 log("macmon stopped (exit {}); restarting".format(code))
             except OSError as e:
                 log("cannot run macmon:", e)
-            time.sleep(RETRY_S)
+            self.stopping.wait(RETRY_S)
 
     def stop(self):
+        self.stopping.set()
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
 

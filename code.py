@@ -1,5 +1,5 @@
 # Tach code.py: show live CPU, GPU and memory use of a Mac.
-# The Mac script (tach-sender.py) sends one JSON line each second on usb_cdc.data.
+# The Mac script (tach-sender.py) sends one JSON line each tick on usb_cdc.data.
 # See design.md, sections 5, 6.2 and 7.
 #
 # Libraries (copy to CIRCUITPY/lib): adafruit_display_text, adafruit_bitmap_font.
@@ -19,9 +19,11 @@ from adafruit_display_text import label
 DEMO = False  # True: show generated test data. Do not read USB.
 BIG_FONT_PATH = "/fonts/tach-36.bdf"
 
-TICK_NS = 1_000_000_000
-STALE_NS = 5 * TICK_NS
+TICK_NS = 500_000_000  # must agree with SEND_INTERVAL_S in tach-sender.py
+STALE_NS = 5_000_000_000
 MAX_LINE = 256
+TIMING = True  # print the work time of each tick on the console
+TIMING_TICKS = 20  # ticks for each timing print
 
 ROW_H = 80
 LABEL_W = 40
@@ -229,6 +231,8 @@ def main():
     latest = {}
     last_rx = None
     tick = 0
+    work_total = 0
+    work_max = 0
     next_tick = time.monotonic_ns() + TICK_NS
 
     while True:
@@ -262,6 +266,19 @@ def main():
                 row.push(value)
                 row.show(value, stale)
             display.refresh()
+
+            if TIMING:
+                work = time.monotonic_ns() - now
+                work_total += work
+                work_max = max(work_max, work)
+                if tick % TIMING_TICKS == 0:
+                    print(
+                        "Tach: tick work ms: avg {:.0f} max {:.0f} (tick {:.0f})".format(
+                            work_total / TIMING_TICKS / 1e6, work_max / 1e6, TICK_NS / 1e6
+                        )
+                    )
+                    work_total = 0
+                    work_max = 0
 
         time.sleep(0.01)
 
