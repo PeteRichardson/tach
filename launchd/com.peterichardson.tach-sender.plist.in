@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template for launchd/install.sh. It replaces the __NAME__ values with real paths. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.peterichardson.tach-sender</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__TACH_DIR__/.venv/bin/python</string>
+        <string>__TACH_DIR__/tach-sender.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__TACH_DIR__</string>
+
+    <!-- launchd gives a short PATH. tach-sender.py needs it to find macmon. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__MACMON_DIR__:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- Start at login. Start again if the script stops. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/tach-sender.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/tach-sender.log</string>
+</dict>
+</plist>

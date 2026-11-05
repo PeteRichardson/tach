@@ -15,6 +15,7 @@ import ctypes
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -256,6 +257,8 @@ def main():
     parser.add_argument("--port", help="serial port of the PyPortal data channel (default: find it)")
     parser.add_argument("--stdout", action="store_true", help="print the lines; do not use USB")
     args = parser.parse_args()
+    # launchd stops the agent with SIGTERM. Exit through the finally block to stop macmon.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     if shutil.which("macmon") is None:
         log("macmon not found. Install it: brew install macmon")

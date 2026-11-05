@@ -92,6 +92,24 @@ disconnects, the script waits and connects again. Push Ctrl-C to stop it.
 | `--port /dev/cu.usbmodemNNNN` | Use this port. Use it if the script selects the wrong port. |
 | `--stdout` | Print the data lines. Do not use USB. |
 
+## Start at login
+
+A `launchd` agent starts `tach-sender.py` when you log in. If the script
+stops, launchd starts it again after 10 seconds.
+
+```sh
+launchd/install.sh             # install (or reinstall) and start the agent
+launchd/install.sh status      # show whether the agent runs
+launchd/install.sh uninstall   # stop and remove the agent
+```
+
+The script uses the Python in `.venv`, so run `uv sync` first. Run
+`install.sh` again if you move the project folder or reinstall macmon. The log
+is in `~/Library/Logs/tach-sender.log`.
+
+When the agent runs, do not also start `uv run tach-sender.py`. Only one
+program can use the data port.
+
 ## Test the display without the Mac
 
 In `CIRCUITPY/code.py`, set `DEMO = True`. The device then shows test data and
