@@ -33,6 +33,17 @@ def log(*parts):
     print(time.strftime("%H:%M:%S"), *parts, file=sys.stderr, flush=True)
 
 
+_last_log_once = None
+
+
+def log_once(*parts):
+    """log(), but not again while the message stays the same."""
+    global _last_log_once
+    if parts != _last_log_once:
+        _last_log_once = parts
+        log(*parts)
+
+
 # --- Memory (design.md 5.1) ---------------------------------------------------
 
 class VMStatistics64(ctypes.Structure):
@@ -169,21 +180,38 @@ class Macmon(threading.Thread):
 # --- USB serial --------------------------------------------------------------
 
 def find_data_port():
-    """Return the device path of the PyPortal data port, or None."""
+    """Return the device path of the PyPortal data port, or None.
+
+    All CircuitPython boards use the Adafruit vendor ID, so group the ports by
+    board (USB serial number). A board with Tach's boot.py has two ports: the
+    console and the data port.
+    """
     from serial.tools import list_ports
 
-    ports = [p for p in list_ports.comports() if p.vid == ADAFRUIT_VID]
-    for p in ports:
-        names = "{} {}".format(p.interface or "", p.description or "").lower()
-        if "data" in names:
-            return p.device
-    if len(ports) >= 2:
-        # macOS often has no interface name. The data interface comes after the
-        # console, so its device name has the higher number.
-        return sorted(p.device for p in ports)[-1]
-    if len(ports) == 1:
-        log("found only one Adafruit port ({}): is boot.py on the device?".format(ports[0].device))
-    return None
+    boards = {}
+    for p in list_ports.comports():
+        if p.vid == ADAFRUIT_VID:
+            boards.setdefault(p.serial_number or p.device, []).append(p)
+
+    candidates = []
+    for ports in boards.values():
+        for p in ports:
+            if "data" in (p.interface or "").lower():
+                return p.device
+        if len(ports) >= 2:
+            candidates.append(ports)
+    if not candidates:
+        if boards:
+            log_once("no Adafruit board has a data port: is boot.py on the device?")
+        return None
+
+    # Prefer a PyPortal. The description is the USB product name.
+    candidates.sort(key=lambda ports: "pyportal" not in (ports[0].description or "").lower())
+    if len(candidates) > 1:
+        log_once("{} boards have a data port; use --port to select one".format(len(candidates)))
+    # macOS often has no interface name. The data interface comes after the
+    # console, so its device name has the higher number.
+    return sorted(p.device for p in candidates[0])[-1]
 
 
 class SerialSink:
