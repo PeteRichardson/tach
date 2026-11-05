@@ -1,6 +1,6 @@
 # Tach — design
 
-Status: draft, 2026-11-05. No code yet.
+Status: v0.1 done, 2026-11-05. The display updates two times each second.
 
 ## 1. Purpose
 
@@ -13,7 +13,7 @@ most important value. The display replaces a TMOG window on the Mac screen.
 ## 2. Goals
 
 - Show CPU, GPU and memory use. Each value has a big number and a line chart.
-- Update one time each second.
+- Update two times each second (each 0.5 s).
 - Use only one USB cable. Do not use Wi-Fi.
 - Do not require `sudo` on the Mac.
 - Keep the device code simple, so that it is easy to change.
@@ -59,7 +59,7 @@ There are 3 rows. Each row is 80 pixels high. Each row has 3 parts:
 |<-40->|<----- 110 ----->|<---------- 170 ---------->|
  CPU      78%              ╱╲__╱‾‾╲___╱╲
  small    big number       line chart, ~70 px high
- label    ~36 px high      170 px wide = ~3 minutes at 1 Hz
+ label    ~36 px high      170 px wide = ~85 s at 2 Hz
 ```
 
 ```
@@ -79,8 +79,9 @@ Rules:
   width keeps the chart in the same position when the value changes. Use a
   smooth bitmap font, approximately 36 px high, with `adafruit_bitmap_font`. Do
   not use the scaled built-in `terminalio` font, because it is blocky.
-- **Chart:** One pixel column for each sample. At 1 Hz, 170 columns show
-  approximately 3 minutes of history. The chart scrolls from right to left.
+- **Chart:** One pixel column for each sample. At 2 Hz, 170 columns show
+  approximately 85 seconds of history. The chart scrolls from right to left.
+  A faster rate gives less history: at 4 Hz, the chart shows only 42 seconds.
 - **Memory unit:** Show GB, not MB. A Mac for LLMs can have 128 GB or more.
 - **Chart scale:** CPU and GPU use 0–100%. Memory uses 0 to the total memory
   of the Mac. Thus, all 3 charts use a fixed scale, and the charts do not jump.
@@ -114,9 +115,9 @@ off load the weights into app or wired memory, and the chart shows them.
 Test this with your runtimes during v0.1. If necessary, add "cached files" as
 a second line on the MEM chart.
 
-**Short spikes:** At 1 sample each second, the chart can miss a short memory
-peak. The Mac script can read memory more frequently (for example 4 times each
-second) and send the maximum value for each second.
+**Short spikes:** At 2 samples each second, the chart can miss a short memory
+peak. Thus, the Mac script reads memory 4 times for each message (8 times each
+second) and sends the maximum value.
 
 ## 6. System architecture
 
@@ -126,7 +127,7 @@ second) and send the maximum value for each second.
 │  macmon pipe ──► JSON lines ──┐                                     │
 │  (CPU, GPU, power)            │                                     │
 │                               ├──► tach-sender.py ──► USB serial ───┼──┐
-│  host_statistics64 ───────────┘    (1 line/second)                  │  │
+│  host_statistics64 ───────────┘    (1 line/0.5 s)                   │  │
 │  (memory)                                                           │  │
 └─────────────────────────────────────────────────────────────────────┘  │
                                                                          │
@@ -151,10 +152,11 @@ second) and send the maximum value for each second.
 - It finds the PyPortal data port. It must find the port automatically: look
   for the Adafruit USB vendor ID, and select the *data* interface, not the
   console.
-- It sends one line each second.
+- It sends one line each 0.5 s (`SEND_INTERVAL_S`).
 - If the device disconnects, the script waits and connects again. It must not
   stop.
-- Later: run it as a `launchd` agent, so that it starts at login.
+- A `launchd` agent starts it at login. `launchd/install.sh` installs the
+  agent. If the script stops, launchd starts it again.
 
 ### 6.2 Device side: `code.py`
 
@@ -164,10 +166,15 @@ second) and send the maximum value for each second.
 - `code.py` reads lines from `usb_cdc.data`. It must not block. It reads the
   bytes that are available and keeps a partial line until it gets `\n`.
 - Each metric has a ring buffer of 170 samples.
-- Each second, the device updates the big numbers and moves each chart by one
-  column.
+- At each tick (0.5 s, `TICK_NS`), the device updates the big numbers and moves
+  each chart by one column. The tick must agree with `SEND_INTERVAL_S` on the
+  Mac. If no message arrived during a tick, the device uses the last value.
+- Each chart is a ring of bitmap columns. A scroll changes only which column
+  shows at each position, and the device draws only the new column.
+- Measured work for each tick: approximately 145 ms average, 192 ms maximum.
+  Thus, a 0.25 s tick is possible, but it has little margin.
 - If there is no data for 5 seconds, the device shows that the connection is
-  stale (for example, the numbers become grey).
+  stale: the numbers become grey, and the charts show empty columns.
 
 ## 7. Message protocol
 
@@ -181,7 +188,7 @@ One JSON object on each line, ended by `\n`. Encoding: UTF-8.
 |---|---|---|---|
 | `cpu` | % | 0–100 | Average of all cores. |
 | `gpu` | % | 0–100 | GPU active residency from `macmon`. |
-| `mem` | GB | 0–`mem_total` | Memory used (app + wired + compressed). Maximum value in the last second. See 5.1. |
+| `mem` | GB | 0–`mem_total` | Memory used (app + wired + compressed). Maximum value since the last message. See 5.1. |
 | `mem_total` | GB | > 0 | Total memory. Used for the chart scale. |
 
 Rules:
@@ -195,7 +202,7 @@ Rules:
 
 1. **Touch:** Use touch to change views (for example, a full-screen chart of
    one metric)? Not for the first version.
-2. **Colour:** Give each metric its own colour? Change the colour of the
+2. **Colour:** v0.1 gives each metric its own colour. Change the colour of the
    number when the value is high (for example, memory above 90%)?
 3. **Brightness:** Make the backlight dim after a period with no data?
 4. **Titano:** Make the layout scale from the screen size, or use a fixed
@@ -206,3 +213,9 @@ Rules:
 1. `boot.py` and `code.py` on the PyPortal. Show 3 rows with test data.
 2. `tach-sender.py` on the Mac. Send real data over `usb_cdc.data`.
 3. Connect the two parts and look at the result.
+
+Status: done. All 3 steps work. After v0.1:
+
+- The update rate changed from 1 to 2 times each second.
+- A `launchd` agent starts `tach-sender.py` at login.
+- Still to do: the `mmap` test in 5.1.
