@@ -22,7 +22,7 @@ BIG_FONT_PATH = "/fonts/tach-36.bdf"
 TICK_NS = 500_000_000  # must agree with SEND_INTERVAL_S in tach-sender.py
 STALE_NS = 5_000_000_000
 MAX_LINE = 256
-TIMING = True  # print the work time of each tick on the console
+TIMING = False  # print the work time of each tick on the console
 TIMING_TICKS = 20  # ticks for each timing print
 
 ROW_H = 80
