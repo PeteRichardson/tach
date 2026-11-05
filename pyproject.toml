@@ -3,6 +3,8 @@ name = "tach"
 version = "0.1.0"
 description = "Small USB display that shows live CPU, GPU and memory use of a Mac"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Pete Richardson", email = "pete@peterichardson.com" }
 ]

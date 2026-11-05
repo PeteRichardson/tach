@@ -39,6 +39,8 @@ The full design is in [design.md](design.md).
 ## Set up the Mac
 
 ```sh
+git clone https://github.com/PeteRichardson/tach.git
+cd tach
 brew install macmon
 uv sync
 ```
@@ -137,3 +139,7 @@ does not read USB. Set `DEMO = False` to use real data again.
 
 `cpu` and `gpu` are in %. `mem` and `mem_total` are in GB. The device ignores
 keys that it does not know. See design.md, section 7.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
