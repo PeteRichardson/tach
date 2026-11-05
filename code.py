@@ -5,6 +5,7 @@
 # Libraries (copy to CIRCUITPY/lib): adafruit_display_text, adafruit_bitmap_font.
 # Big-number font: put a BDF or PCF font, approximately 36 px high, at BIG_FONT_PATH.
 # If the font is missing, the device uses the scaled built-in font.
+import array
 import json
 import math
 import time
@@ -25,6 +26,14 @@ MAX_LINE = 256
 TIMING = False  # print the work time of each tick on the console
 TIMING_TICKS = 20  # ticks for each timing print
 
+# MEM chart: compressed time axis and zoomed y axis (design.md 5.2)
+MEM_HISTORY_S = 5 * 60  # age of the left edge of the MEM chart
+MEM_GRID_S = (60, 2 * 60, 3 * 60, 4 * 60)  # dotted time lines on the MEM chart
+MEM_MIN_SPAN_GB = 1.0  # smallest y span, so that noise does not look large
+MEM_STEPS_GB = (0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100)
+MEM_SCALE_COLOR = 0x808080
+GRID = 0x404040
+
 ROW_H = 80
 LABEL_W = 40
 NUMBER_W = 110
@@ -35,11 +44,11 @@ BG = 0x000000
 RULE = 0x303030
 STALE_COLOR = 0x505050
 
-# key, label, colour, chart full scale (memory scale comes from mem_total)
+# key, label, colour, chart full scale (the MEM scale follows the data)
 METRICS = (
     ("cpu", "CPU", 0x40C0FF, 100.0),
     ("gpu", "GPU", 0x60FF60, 100.0),
-    ("mem", "MEM", 0xFFB040, 128.0),
+    ("mem", "MEM", 0xFFB040, None),
 )
 
 
@@ -77,7 +86,9 @@ class Row:
         self.number.anchor_point = (1.0, 0.5)
         self.number.anchored_position = (LABEL_W + NUMBER_W - 6, ROW_H // 2)
         self.group.append(self.number)
+        self._make_chart(color, LABEL_W + NUMBER_W, (ROW_H - CHART_H) // 2)
 
+    def _make_chart(self, color, x, y):
         # The chart bitmap is a ring of columns. Each tile of the TileGrid is one
         # bitmap column, so a scroll only changes tile indices, not pixels.
         self.bitmap = displayio.Bitmap(CHART_W, CHART_H, 3)
@@ -92,8 +103,8 @@ class Row:
             height=1,
             tile_width=1,
             tile_height=CHART_H,
-            x=LABEL_W + NUMBER_W,
-            y=(ROW_H - CHART_H) // 2,
+            x=x,
+            y=y,
         )
         self.group.append(self.grid)
 
@@ -129,21 +140,159 @@ class Row:
         self.head = (col + 1) % CHART_W
         self._place_tiles()
 
-    def rescale(self, full):
-        if full <= 0 or full == self.full:
-            return
-        self.full = full
-        for i in range(CHART_W):
-            col = (self.head + i) % CHART_W
-            prev = self.samples[col - 1] if i else None
-            self._draw_column(col, self.samples[col], prev)
-
     def show(self, value, stale):
         if value is not None:
             text = self.fmt(value)
             if text != self.number.text:
                 self.number.text = text
         self.number.color = STALE_COLOR if stale else self.color
+
+
+def nice_range(lo, hi):
+    """Round lo..hi out to steps, so that the y axis does not move at each tick."""
+    if hi - lo < MEM_MIN_SPAN_GB:
+        mid = (lo + hi) / 2
+        lo, hi = mid - MEM_MIN_SPAN_GB / 2, mid + MEM_MIN_SPAN_GB / 2
+    for step in MEM_STEPS_GB:
+        if (hi - lo) / step <= 5:
+            break
+    lo = max(math.floor(lo / step) * step, 0)
+    hi = math.ceil(hi / step) * step
+    return lo, hi
+
+
+def log_edges(columns, samples):
+    """Return columns + 1 sample ages. Column x (0 = right edge) shows the samples
+    with an age from edges[x] to edges[x + 1] - 1. The first columns have one
+    sample each; the age grows exponentially to the left edge."""
+    samples = max(samples, columns)
+    # age(x) = b * (exp(x / b) - 1) has 1 sample per column at x = 0.
+    # Find b so that age(columns) = samples. age() decreases when b increases.
+    lo, hi = columns / 80, 1e6
+    for _ in range(60):
+        b = (lo + hi) / 2
+        if b * (math.exp(columns / b) - 1) > samples:
+            lo = b
+        else:
+            hi = b
+    edges = [0]
+    for x in range(1, columns):
+        edges.append(max(int(b * (math.exp(x / b) - 1) + 0.5), edges[-1] + 1))
+    edges.append(max(samples, edges[-1] + 1))
+    return edges
+
+
+class MemRow(Row):
+    """The MEM row: a compressed time axis and a y axis that zooms to the data.
+
+    Samples are in units of 0.01 GB. Two arrays keep each sample: in `his` a gap
+    is 0, and in `los` a gap is 0xFFFF. Thus max() and min() skip the gaps."""
+
+    GAP_HI = 0
+    GAP_LO = 0xFFFF
+
+    def _make_chart(self, color, x, y):
+        self.size = int(MEM_HISTORY_S * 1e9 / TICK_NS)
+        self.edges = log_edges(CHART_W, self.size)
+        self.size = self.edges[-1]
+        self.his = array.array("H", (self.GAP_HI for _ in range(self.size)))
+        self.los = array.array("H", (self.GAP_LO for _ in range(self.size)))
+        self.head = 0  # next index to write
+        self.grid_cols = set()
+        for seconds in MEM_GRID_S:
+            age = seconds * 1e9 / TICK_NS
+            for col, edge in enumerate(self.edges):
+                if edge >= age:
+                    self.grid_cols.add(CHART_W - 1 - col)
+                    break
+
+        self.bitmap = displayio.Bitmap(CHART_W, CHART_H, 4)
+        palette = displayio.Palette(4)
+        palette[0] = BG
+        palette[1] = dim(color)
+        palette[2] = color
+        palette[3] = GRID
+        self.group.append(displayio.TileGrid(self.bitmap, pixel_shader=palette, x=x, y=y))
+
+        self.top = label.Label(terminalio.FONT, text="", color=MEM_SCALE_COLOR)
+        self.top.anchor_point = (0.0, 0.0)
+        self.top.anchored_position = (x + 2, y + 1)
+        self.group.append(self.top)
+        self.bottom = label.Label(terminalio.FONT, text="", color=MEM_SCALE_COLOR)
+        self.bottom.anchor_point = (0.0, 1.0)
+        self.bottom.anchored_position = (x + 2, y + CHART_H - 1)
+        self.group.append(self.bottom)
+
+    def _agg(self, values, a, b, fn):
+        """fn() of the samples with an age from a to b - 1."""
+        start = (self.head - b) % self.size
+        end = start + (b - a)
+        view = memoryview(values)
+        if end <= self.size:
+            return fn(view[start:end])
+        return fn(fn(view[start:]), fn(view[: end - self.size]))
+
+    def push(self, value):
+        if value is None:
+            self.his[self.head] = self.GAP_HI
+            self.los[self.head] = self.GAP_LO
+        else:
+            v = min(max(int(value * 100 + 0.5), 1), 0xFFFE)
+            self.his[self.head] = v
+            self.los[self.head] = v
+        self.head = (self.head + 1) % self.size
+        self._redraw()
+
+    def _redraw(self):
+        cols = []
+        lo_all, hi_all = self.GAP_LO, self.GAP_HI
+        for x in range(CHART_W):
+            a, b = self.edges[x], self.edges[x + 1]
+            hi = self._agg(self.his, a, b, max)
+            if hi == self.GAP_HI:
+                cols.append(None)
+                continue
+            lo = self._agg(self.los, a, b, min)
+            cols.append((lo, hi))
+            lo_all = min(lo_all, lo)
+            hi_all = max(hi_all, hi)
+
+        if hi_all == self.GAP_HI:
+            bitmaptools.fill_region(self.bitmap, 0, 0, CHART_W, CHART_H, 0)
+            self._set_scale("", "")
+            return
+        lo_gb, hi_gb = nice_range(lo_all / 100, hi_all / 100)
+        self._set_scale(fmt_gb(hi_gb), fmt_gb(lo_gb))
+
+        # y of a value in 0.01 GB
+        k = (CHART_H - 1) / ((hi_gb - lo_gb) * 100)
+        base = lo_gb * 100
+
+        def y_of(v):
+            return min(max(CHART_H - 1 - round((v - base) * k), 0), CHART_H - 1)
+
+        ys = [None if c is None else (y_of(c[1]), y_of(c[0])) for c in cols]
+        for x in range(CHART_W):
+            col = CHART_W - 1 - x
+            bitmaptools.fill_region(self.bitmap, col, 0, col + 1, CHART_H, 0)
+            if col in self.grid_cols:
+                for gy in range(0, CHART_H, 3):
+                    self.bitmap[col, gy] = 3
+            if ys[x] is None:
+                continue
+            top, bottom = ys[x]
+            bitmaptools.fill_region(self.bitmap, col, top, col + 1, CHART_H, 1)
+            older = ys[x + 1] if x + 1 < CHART_W else None
+            if older is not None:
+                # join the line to the next older column
+                top, bottom = min(top, older[1]), max(bottom, older[0])
+            bitmaptools.fill_region(self.bitmap, col, top, col + 1, bottom + 1, 2)
+
+    def _set_scale(self, top, bottom):
+        if self.top.text != top:
+            self.top.text = top
+        if self.bottom.text != bottom:
+            self.bottom.text = bottom
 
 
 class LineReader:
@@ -201,7 +350,8 @@ def build_display(font, scale):
     root = displayio.Group()
     rows = {}
     for i, (key, name, color, full) in enumerate(METRICS):
-        row = Row(i * ROW_H, name, color, full, font, scale)
+        row_class = MemRow if key == "mem" else Row
+        row = row_class(i * ROW_H, name, color, full, font, scale)
         rows[key] = row
         root.append(row.group)
 
@@ -241,7 +391,7 @@ def main():
                 msg = parse(line)
                 if msg is None:
                     continue
-                for key in ("cpu", "gpu", "mem", "mem_total"):
+                for key in ("cpu", "gpu", "mem"):
                     value = msg.get(key)
                     if isinstance(value, (int, float)):
                         latest[key] = float(value)
@@ -259,8 +409,6 @@ def main():
                 last_rx = now
 
             stale = last_rx is None or now - last_rx > STALE_NS
-            if "mem_total" in latest:
-                rows["mem"].rescale(latest["mem_total"])
             for key, row in rows.items():
                 value = None if stale else latest.get(key)
                 row.push(value)

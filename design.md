@@ -80,11 +80,11 @@ Rules:
   smooth bitmap font, approximately 36 px high, with `adafruit_bitmap_font`. Do
   not use the scaled built-in `terminalio` font, because it is blocky.
 - **Chart:** One pixel column for each sample. At 2 Hz, 170 columns show
-  approximately 85 seconds of history. The chart scrolls from right to left.
+  approximately 85 seconds of history. (The MEM chart is different. See 5.2.) The chart scrolls from right to left.
   A faster rate gives less history: at 4 Hz, the chart shows only 42 seconds.
 - **Memory unit:** Show GB, not MB. A Mac for LLMs can have 128 GB or more.
-- **Chart scale:** CPU and GPU use 0–100%. Memory uses 0 to the total memory
-  of the Mac. Thus, all 3 charts use a fixed scale, and the charts do not jump.
+- **Chart scale:** CPU and GPU use a fixed scale of 0–100%. The MEM chart
+  zooms to its data. See 5.2.
 
 Physical size on the PyPortal: each row is approximately 16 mm high. The big
 numbers are approximately 7 mm high. You can read them at arm's length.
@@ -118,6 +118,33 @@ a second line on the MEM chart.
 **Short spikes:** At 2 samples each second, the chart can miss a short memory
 peak. Thus, the Mac script reads memory 4 times for each message (8 times each
 second) and sends the maximum value.
+
+### 5.2 MEM chart (decided)
+
+On a Mac with much memory (for example 256 GB), a 0-to-total scale shows a
+flat line. And at 2 Hz, 170 columns show only 85 seconds. Thus, the MEM chart
+works as in TMOG:
+
+- **Compressed time axis:** The chart shows the last 5 minutes
+  (`MEM_HISTORY_S`). The right columns show one sample each. To the left, the
+  time of each column increases exponentially:
+  `age(x) = b · (eˣᐟᵇ − 1)` samples, where x is the column from the right edge,
+  and b gives `age(170)` = 5 minutes. At 2 Hz, the right 73 columns show the
+  last minute, and the leftmost column covers approximately 4.5 seconds.
+- **Minimum and maximum:** Each column shows a line from the lowest to the
+  highest sample in its period. Thus, short peaks stay visible.
+- **Time marks:** Faint dotted lines show 1, 2, 3 and 4 minutes ago
+  (`MEM_GRID_S`), because the time scale is not even.
+- **Zoomed y axis:** The scale goes from the lowest to the highest value in the
+  5 minutes. It is rounded out to a step (0.1, 0.2, 0.5, 1, 2, 5 … GB) that
+  gives 5 steps or less. Thus, the scale does not move at each tick. The
+  minimum span is 1 GB (`MEM_MIN_SPAN_GB`), so that noise does not look large.
+  Small labels in the top-left and bottom-left corners show the limits.
+- **Storage:** The device keeps all 600 samples, in units of 0.01 GB, in two
+  `array('H')` buffers (2.4 KB). In one buffer a gap is 0, and in the other it is
+  0xFFFF, so that C-speed `max()` and `min()` on slices skip the gaps. The
+  history is in RAM, so after a reset the chart fills again from the right.
+- **Cost:** The device draws all 170 MEM columns again at each tick.
 
 ## 6. System architecture
 
@@ -165,14 +192,16 @@ second) and sends the maximum value.
   Tach messages, so the messages do not mix with the REPL console.
 - `code.py` reads lines from `usb_cdc.data`. It must not block. It reads the
   bytes that are available and keeps a partial line until it gets `\n`.
-- Each metric has a ring buffer of 170 samples.
+- CPU and GPU each have a ring buffer of 170 samples. MEM has a buffer of
+  5 minutes (see 5.2).
 - At each tick (0.5 s, `TICK_NS`), the device updates the big numbers and moves
   each chart by one column. The tick must agree with `SEND_INTERVAL_S` on the
   Mac. If no message arrived during a tick, the device uses the last value.
-- Each chart is a ring of bitmap columns. A scroll changes only which column
-  shows at each position, and the device draws only the new column.
-- Measured work for each tick: approximately 145 ms average, 192 ms maximum.
-  Thus, a 0.25 s tick is possible, but it has little margin.
+- The CPU and GPU charts are rings of bitmap columns. A scroll changes only
+  which column shows at each position, and the device draws only the new
+  column. The MEM chart is drawn again completely at each tick (see 5.2).
+- Measured work for each tick, with a full MEM history: approximately 265 ms
+  average, 278 ms maximum. Thus, a 0.25 s tick is not possible.
 - If there is no data for 5 seconds, the device shows that the connection is
   stale: the numbers become grey, and the charts show empty columns.
 
@@ -189,7 +218,7 @@ One JSON object on each line, ended by `\n`. Encoding: UTF-8.
 | `cpu` | % | 0–100 | Average of all cores. |
 | `gpu` | % | 0–100 | GPU active residency from `macmon`. |
 | `mem` | GB | 0–`mem_total` | Memory used (app + wired + compressed). Maximum value since the last message. See 5.1. |
-| `mem_total` | GB | > 0 | Total memory. Used for the chart scale. |
+| `mem_total` | GB | > 0 | Total memory. The device does not use it now (see 5.2). |
 
 Rules:
 

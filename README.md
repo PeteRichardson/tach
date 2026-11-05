@@ -14,7 +14,9 @@ the Mac while it runs local LLMs.
 └────────────────────────────────────────────┘
 ```
 
-Each row has a big number and a chart of approximately the last 1.5 minutes. The
+Each row has a big number and a chart. The CPU and GPU charts show
+approximately the last 1.5 minutes. The MEM chart shows the last 5 minutes on
+a compressed time axis, and its scale zooms to the data. The
 display updates two times each second. Memory is "Memory Used", the same value
 as in Activity Monitor.
 
