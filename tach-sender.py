@@ -183,21 +183,20 @@ def find_data_port():
     """Return the device path of the PyPortal data port, or None.
 
     All CircuitPython boards use the Adafruit vendor ID, so group the ports by
-    board (USB serial number). A board with Tach's boot.py has two ports: the
-    console and the data port.
+    board. A board with Tach's boot.py has two ports: the console and the data
+    port. Group by USB serial number; when macOS omits it, fall back to the
+    IORegistry location (p.location), which is shared by both ports of one
+    device.
     """
     from serial.tools import list_ports
 
     boards = {}
     for p in list_ports.comports():
         if p.vid == ADAFRUIT_VID:
-            boards.setdefault(p.serial_number or p.device, []).append(p)
+            boards.setdefault(p.serial_number or p.location, []).append(p)
 
     candidates = []
     for ports in boards.values():
-        for p in ports:
-            if "data" in (p.interface or "").lower():
-                return p.device
         if len(ports) >= 2:
             candidates.append(ports)
     if not candidates:
@@ -209,8 +208,9 @@ def find_data_port():
     candidates.sort(key=lambda ports: "pyportal" not in (ports[0].description or "").lower())
     if len(candidates) > 1:
         log_once("{} boards have a data port; use --port to select one".format(len(candidates)))
-    # macOS often has no interface name. The data interface comes after the
-    # console, so its device name has the higher number.
+    # macOS pyserial does not populate p.interface, so the numeric heuristic
+    # is the only way to distinguish console from data port: the data
+    # interface comes after the console, so its device name has the higher number.
     return sorted(p.device for p in candidates[0])[-1]
 
 

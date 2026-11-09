@@ -187,8 +187,9 @@ works as in TMOG:
 - It gets memory data from `host_statistics64()` or `vm_stat`. See 5.1 for
   the definition.
 - It finds the PyPortal data port. It must find the port automatically: look
-  for the Adafruit USB vendor ID, and select the *data* interface, not the
-  console.
+  for the Adafruit USB vendor ID, group ports by board (USB serial number, or
+  IORegistry location when macOS omits it), and select the *data* interface,
+  not the console, by the higher device number.
 - It sends one line each 0.5 s (`SEND_INTERVAL_S`).
 - If the device disconnects, the script waits and connects again. It must not
   stop.
