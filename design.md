@@ -107,13 +107,23 @@ Get the page counts from `host_statistics64()` (or `vm_stat`), and multiply by
 the page size (16 KB on Apple Silicon). Do not use `psutil.virtual_memory().used`,
 because on macOS it does not give the same value as Activity Monitor.
 
-**Caution — memory-mapped model files:** Some LLM runtimes (for example
+**Memory-mapped model files (resolved):** Some LLM runtimes (for example
 llama.cpp and Ollama with their default `mmap` setting) map the model file into
-memory. These pages can show as "cached files", not as "memory used". Then the
-chart does not show the full size of the model. MLX and runtimes with `mmap`
-off load the weights into app or wired memory, and the chart shows them.
-Test this with your runtimes during v0.1. If necessary, add "cached files" as
-a second line on the MEM chart.
+memory. These pages show as "File-backed pages" in `vm_stat`, tracked by
+`external_page_count` in `host_statistics64()`. They are NOT included in the
+formula above, which matches Activity Monitor's "Memory Used" exactly —
+Activity Monitor also excludes file-backed pages from its total.
+
+Verified on this machine: the current formula gives 133.6 GB, matching
+Activity Monitor's "Memory Used" and `total − free − inactive − speculative −
+purgeable`. Adding `external_page_count` would overcount by ~80 GB (the
+"File-backed pages" from `vm_stat`), diverging from what the user sees in
+Activity Monitor.
+
+MLX and runtimes with `mmap` off load weights into app or wired memory, which
+the formula counts. Only `mmap`-on runtimes (llama.cpp, Ollama) have the gap,
+and it is intentional: the chart shows what Activity Monitor shows. No second
+MEM line is added.
 
 **Short spikes:** At 2 samples each second, the chart can miss a short memory
 peak. Thus, the Mac script reads memory 4 times for each message (8 times each
@@ -250,4 +260,5 @@ Status: done. All 3 steps work. After v0.1:
 - A `launchd` agent starts `tach-sender.py` at login. It restarts on crash
   (KeepAlive: SuccessfulExit=false), but exits cleanly when `macmon` or
   `pyserial` is missing so it does not crash-loop.
-- Still to do: the `mmap` test in 5.1.
+- The `mmap` question is resolved in 5.1: file-backed pages (including
+  mmap'd models) are excluded by design, matching Activity Monitor.
