@@ -293,8 +293,8 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     if shutil.which("macmon") is None:
-        log("macmon not found. Install it: brew install macmon")
-        return 1
+        log_once("macmon not found. Install it: brew install macmon")
+        return 0  # clean exit: launchd should not restart (KeepAlive: SuccessfulExit=false)
 
     memory = Memory()
     macmon = Macmon()
@@ -302,8 +302,8 @@ def main():
     try:
         sink = StdoutSink() if args.stdout else SerialSink(args.port)
     except ImportError:
-        log("pyserial not found. Run the script with: uv run tach-sender.py")
-        return 1
+        log_once("pyserial not found. Run the script with: uv run tach-sender.py")
+        return 0  # clean exit: launchd should not restart (KeepAlive: SuccessfulExit=false)
 
     step = SEND_INTERVAL_S / MEM_SAMPLES_PER_SEND
     next_sample = time.monotonic()
