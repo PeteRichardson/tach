@@ -183,7 +183,8 @@ works as in TMOG:
 - If the device disconnects, the script waits and connects again. It must not
   stop.
 - A `launchd` agent starts it at login. `launchd/install.sh` installs the
-  agent. If the script stops, launchd starts it again.
+  agent. If the script crashes, launchd restarts it (every 10s). If the script
+  exits cleanly (e.g. missing `macmon` or `pyserial`), launchd does not restart it.
 
 ### 6.2 Device side: `code.py`
 
@@ -246,5 +247,7 @@ Rules:
 Status: done. All 3 steps work. After v0.1:
 
 - The update rate changed from 1 to 2 times each second.
-- A `launchd` agent starts `tach-sender.py` at login.
+- A `launchd` agent starts `tach-sender.py` at login. It restarts on crash
+  (KeepAlive: SuccessfulExit=false), but exits cleanly when `macmon` or
+  `pyserial` is missing so it does not crash-loop.
 - Still to do: the `mmap` test in 5.1.

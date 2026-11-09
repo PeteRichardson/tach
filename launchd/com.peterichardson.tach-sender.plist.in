@@ -21,11 +21,14 @@
         <string>__MACMON_DIR__:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
 
-    <!-- Start at login. Start again if the script stops. -->
+    <!-- Start at login. Restart only on crash, not on clean exits. -->
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>ThrottleInterval</key>
     <integer>10</integer>
 
