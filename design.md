@@ -100,6 +100,11 @@ Rules:
 - **Memory unit:** Show GB, not MB. A Mac for LLMs can have 128 GB or more.
 - **Chart scale:** CPU and GPU use a fixed scale of 0–100%. The MEM chart
   zooms to its data. See 5.2.
+- **Retention nudge:** The display is lit 24/7. Every 5 minutes
+  (`PIXEL_SHIFT_NS`) the whole screen shifts by 1 px through four diagonal
+  positions (`pixel_shift()`), so the static pixels — labels, the units
+  column, the rules — do not stay lit in one spot. At offset 1 the rightmost
+  chart column and the bottom row clip by 1 px. See 6.2.
 
 Physical size on the PyPortal: each row is approximately 16 mm high. The big
 numbers are approximately 7 mm high. You can read them at arm's length.

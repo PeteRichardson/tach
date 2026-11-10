@@ -75,6 +75,18 @@ def test_no_text_measurement_api(codepy_source):
     assert "dimensions" not in codepy_source
 
 
+def test_pixel_shift_cycles_four_positions(tach_code):
+    """24/7 lighting mitigation: every 5 min (PIXEL_SHIFT_NS) the whole root
+    group moves through four diagonal 1 px positions and back, so no pixel
+    stays lit in one spot and the content never drifts cumulatively."""
+    assert tach_code.PIXEL_SHIFT_NS == 5 * 60 * 1_000_000_000
+    cycle = [tach_code.pixel_shift(p) for p in range(4)]
+    assert cycle == [(0, 0), (1, 0), (0, 1), (1, 1)]
+    assert tach_code.pixel_shift(4) == (0, 0)  # repeats, no drift
+    # 1 px only: the shift must not exceed the layout's edge slack
+    assert max(max(x, y) for x, y in cycle) == 1
+
+
 def test_charts_fill_the_rest_of_the_row(tach_code):
     """The chart starts after the number slot and runs to the right screen
     edge: ~3/4 of the width, the widest it gets without crowding the text."""
