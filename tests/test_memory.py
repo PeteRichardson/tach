@@ -133,8 +133,12 @@ def test_live_used_gb_is_within_total(tach_sender):
 
     If the field list ever mismatches the kernel's struct, host_statistics64
     fails (kr != 0) and this raises OSError, instead of shipping wrong readings.
-    """
+
+    The total bound is 1 GB, not a realistic Mac size: GitHub's macos-latest
+    runners are a mixed pool and report as little as 7 GB, so an 8 GB bound
+    fails on hardware, not on a code fault. 1 GB still catches a garbage total
+    (a sysctl misparse returning 0 or a tiny value)."""
     mem = tach_sender.Memory()
     used = mem.used_gb()
     assert 0.0 < used < mem.total_gb
-    assert mem.total_gb >= 8.0
+    assert mem.total_gb >= 1.0
