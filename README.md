@@ -4,18 +4,10 @@ Tach is a small external display that shows live CPU, GPU and memory use of a
 Mac. It uses an Adafruit PyPortal and one USB cable. The main use is to monitor
 the Mac while it runs local LLMs.
 
-```
-┌────────────────────────────────────────────┐
-│ CPU   78%    ╱╲__╱‾‾╲___╱╲__                │
-├────────────────────────────────────────────┤
-│ GPU   92%    ___╱‾‾‾‾‾‾‾‾‾‾‾╲_              │
-├────────────────────────────────────────────┤
-│ MEM  97.4G   ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾              │
-└────────────────────────────────────────────┘
-```
+![The Tach display: each row shows a label, a big number and a live chart for CPU, GPU and memory](images/tach.jpg)
 
 Each row has a big number and a chart. The CPU and GPU charts show
-approximately the last 1.5 minutes. The MEM chart shows the last 5 minutes on
+approximately the last 1.7 minutes. The MEM chart shows the last 5 minutes on
 a compressed time axis, and its scale zooms to the data. The
 display updates two times each second. Memory is "Memory Used", the same value
 as in Activity Monitor.
