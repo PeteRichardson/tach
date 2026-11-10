@@ -9,6 +9,7 @@ import array
 import json
 import math
 import time
+from collections import namedtuple
 
 import bitmaptools
 import board
@@ -44,13 +45,6 @@ BG = 0x000000
 RULE = 0x303030
 STALE_COLOR = 0x505050
 
-# key, label, colour, chart full scale (the MEM scale follows the data)
-METRICS = (
-    ("cpu", "CPU", 0x40C0FF, 100.0),
-    ("gpu", "GPU", 0x60FF60, 100.0),
-    ("mem", "MEM", 0xFFB040, None),
-)
-
 
 def dim(color):
     r, g, b = (color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF
@@ -71,10 +65,14 @@ def fmt_gb(value):
 class Row:
     """One metric: small label, big number, scrolling line chart."""
 
-    def __init__(self, y, name, color, full, font, scale):
+    def __init__(self, y, name, color, full, font, scale, fmt):
+        if full is None:
+            # _y divides by self.full: a None here would hard-fault the device
+            # at the first drawn sample.
+            raise ValueError("Row needs a numeric full scale")
         self.color = color
         self.full = full
-        self.fmt = fmt_gb if name == "MEM" else fmt_pct
+        self.fmt = fmt
         self.group = displayio.Group(y=y)
 
         name_label = label.Label(terminalio.FONT, text=name, color=color)
@@ -295,6 +293,18 @@ class MemRow(Row):
             self.bottom.text = bottom
 
 
+# The single definition of the displayed metrics: key, label, colour, chart
+# full scale, row class, number formatter. MemRow autoscales and ignores its
+# full_scale. build_display() and the parse loop read this table.
+Metric = namedtuple("Metric", "key label color full_scale row_class fmt")
+METRICS = (
+    Metric("cpu", "CPU", 0x40C0FF, 100.0, Row, fmt_pct),
+    Metric("gpu", "GPU", 0x60FF60, 100.0, Row, fmt_pct),
+    Metric("mem", "MEM", 0xFFB040, 1.0, MemRow, fmt_gb),
+)
+METRIC_KEYS = tuple(m.key for m in METRICS)
+
+
 class LineReader:
     """Read lines from a serial port without blocking."""
 
@@ -349,10 +359,9 @@ def load_big_font():
 def build_display(font, scale):
     root = displayio.Group()
     rows = {}
-    for i, (key, name, color, full) in enumerate(METRICS):
-        row_class = MemRow if key == "mem" else Row
-        row = row_class(i * ROW_H, name, color, full, font, scale)
-        rows[key] = row
+    for i, m in enumerate(METRICS):
+        row = m.row_class(i * ROW_H, m.label, m.color, m.full_scale, font, scale, m.fmt)
+        rows[m.key] = row
         root.append(row.group)
 
     rule = displayio.Bitmap(LABEL_W + NUMBER_W + CHART_W, 1, 1)
@@ -379,6 +388,7 @@ def main():
             reader = LineReader(usb_cdc.data)
 
     latest = {}
+    keys = METRIC_KEYS  # local bind: the parse loop reads it per received line
     last_rx = None
     tick = 0
     work_total = 0
@@ -391,7 +401,7 @@ def main():
                 msg = parse(line)
                 if msg is None:
                     continue
-                for key in ("cpu", "gpu", "mem"):
+                for key in keys:
                     value = msg.get(key)
                     if isinstance(value, (int, float)):
                         latest[key] = float(value)
