@@ -36,11 +36,32 @@ MEM_STEPS_GB = (0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100)
 MEM_SCALE_COLOR = 0x808080
 GRID = 0x404040
 
+SCREEN_W = 320  # PyPortal landscape (design.md 4); the layout is fixed pixels
 ROW_H = 80
-LABEL_W = 40
-NUMBER_W = 110
-CHART_W = 170
 CHART_H = 70
+TEXT_X = 4  # x of the row label and the big number
+LABEL_Y = 2  # y of the label top; corner of the row
+LABEL_SCALE = 2  # built-in font twice as big for the row label
+# Built-in font metrics (terminalio is fixed-size: ~8 px advance, ~11 px
+# line). Constants on purpose: the Label text-measurement property changes
+# name between adafruit_display_text versions, and the built-in font never
+# varies. See tests/test_display_rows.py for the guard.
+LABEL_ADV = 8
+LABEL_LINE_H = 11
+NUMBER_GAP = 5  # vertical gap: label bottom -> number top
+NUMBER_Y = LABEL_Y + LABEL_LINE_H * LABEL_SCALE + NUMBER_GAP  # 29
+NUMBER_W = 100  # reserved width of the big number (5 chars at ~36 px)
+# Static right edge for all three numbers: the "%" and "G" line up in one
+# column. Fixed value so the string width changes no layout. 10 px in from
+# the slot edge; the worst-case strings ("100%", "97.4G", ~94 px wide) then
+# end at x = 0, so a wider font clips at the screen edge.
+NUMBER_RIGHT_X = TEXT_X + NUMBER_W - 10  # 94
+BOLD_SHIFT = 1  # px: the number is drawn twice, offset right, to fake bold
+CHART_GAP = 10  # horizontal gap: number slot -> chart
+AXIS_GAP = 6  # horizontal gap: MEM y-axis labels -> chart
+CHART_X = TEXT_X + NUMBER_W + CHART_GAP  # 114
+CHART_W = SCREEN_W - CHART_X  # 206 columns: ~103 s at 2 Hz (design.md 5)
+CHART_Y = (ROW_H - CHART_H) // 2
 
 BG = 0x000000
 RULE = 0x303030
@@ -64,7 +85,8 @@ def fmt_gb(value):
 
 
 class Row:
-    """One metric: small label, big number, scrolling line chart."""
+    """One metric: label in the upper-left corner, big number under it,
+    scrolling line chart on the rest of the row."""
 
     def __init__(self, y, name, color, full, font, scale, fmt):
         if full is None:
@@ -76,16 +98,28 @@ class Row:
         self.fmt = fmt
         self.group = displayio.Group(y=y)
 
-        name_label = label.Label(terminalio.FONT, text=name, color=color)
-        name_label.anchor_point = (0.0, 0.5)
-        name_label.anchored_position = (4, ROW_H // 2)
+        name_label = label.Label(terminalio.FONT, text=name, color=color, scale=LABEL_SCALE)
+        name_label.anchor_point = (0.0, 0.0)
+        name_label.anchored_position = (TEXT_X, LABEL_Y)
         self.group.append(name_label)
 
+        # Right-aligned at the static NUMBER_RIGHT_X so the units (% and G)
+        # line up. A wider font than NUMBER_W assumes extends left, under the
+        # label, before it could reach the chart.
         self.number = label.Label(font, text="--", color=STALE_COLOR, scale=scale)
-        self.number.anchor_point = (1.0, 0.5)
-        self.number.anchored_position = (LABEL_W + NUMBER_W - 6, ROW_H // 2)
+        self.number.anchor_point = (1.0, 0.0)
+        self.number.anchored_position = (NUMBER_RIGHT_X, NUMBER_Y)
         self.group.append(self.number)
-        self._make_chart(color, LABEL_W + NUMBER_W, (ROW_H - CHART_H) // 2)
+        self._make_chart(color, CHART_X, CHART_Y)
+
+        # Pseudo-bold: the font comes from a user file, so the weight is what
+        # the file says. Drawing the same text again BOLD_SHIFT px right
+        # thickens every stroke. Both labels share the loaded font, so the
+        # extra cost is one small text bitmap per row.
+        self.number_bold = label.Label(font, text="--", color=STALE_COLOR, scale=scale)
+        self.number_bold.anchor_point = (1.0, 0.0)
+        self.number_bold.anchored_position = (NUMBER_RIGHT_X + BOLD_SHIFT, NUMBER_Y)
+        self.group.append(self.number_bold)
 
     def _make_chart(self, color, x, y):
         # The chart bitmap is a ring of columns. Each tile of the TileGrid is one
@@ -144,7 +178,10 @@ class Row:
             text = self.fmt(value)
             if text != self.number.text:
                 self.number.text = text
-        self.number.color = STALE_COLOR if stale else self.color
+                self.number_bold.text = text
+        color = STALE_COLOR if stale else self.color
+        self.number.color = color
+        self.number_bold.color = color
 
 
 def nice_range(lo, hi):
@@ -213,13 +250,17 @@ class MemRow(Row):
         palette[3] = GRID
         self.group.append(displayio.TileGrid(self.bitmap, pixel_shader=palette, x=x, y=y))
 
+        # The y-axis limits go to the left of the chart, right-aligned to it,
+        # so the line can never cover them. They share the column with the
+        # big number without touching it: the number sits between them, and
+        # the bottom label hangs 2 px below the chart to clear its base.
         self.top = label.Label(terminalio.FONT, text="", color=MEM_SCALE_COLOR)
-        self.top.anchor_point = (0.0, 0.0)
-        self.top.anchored_position = (x + 2, y + 1)
+        self.top.anchor_point = (1.0, 0.0)
+        self.top.anchored_position = (x - AXIS_GAP, y)
         self.group.append(self.top)
         self.bottom = label.Label(terminalio.FONT, text="", color=MEM_SCALE_COLOR)
-        self.bottom.anchor_point = (0.0, 1.0)
-        self.bottom.anchored_position = (x + 2, y + CHART_H - 1)
+        self.bottom.anchor_point = (1.0, 1.0)
+        self.bottom.anchored_position = (x - AXIS_GAP, ROW_H - 2)
         self.group.append(self.bottom)
 
     def _agg(self, values, a, b, fn):
@@ -369,13 +410,15 @@ def build_display(font, scale, big_font_ok):
     if not big_font_ok:
         # Global chrome on root, like the rules: the console print in
         # load_big_font() is invisible unless the console port is open, so
-        # mark the fallback in the top-left corner of the screen.
+        # mark the fallback at the top of the screen. The corner belongs to
+        # the CPU label, so the notice starts to the right of it.
+        warn_x = TEXT_X + LABEL_ADV * LABEL_SCALE * len(METRICS[0].label) + 4
         warn = label.Label(terminalio.FONT, text="NO FONT", color=MEM_SCALE_COLOR)
         warn.anchor_point = (0.0, 0.0)
-        warn.anchored_position = (4, 2)
+        warn.anchored_position = (warn_x, LABEL_Y)
         root.append(warn)
 
-    rule = displayio.Bitmap(LABEL_W + NUMBER_W + CHART_W, 1, 1)
+    rule = displayio.Bitmap(SCREEN_W, 1, 1)
     rule_palette = displayio.Palette(1)
     rule_palette[0] = RULE
     for i in range(1, len(METRICS)):
