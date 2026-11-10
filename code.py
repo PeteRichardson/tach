@@ -27,6 +27,9 @@ STALE_NS = 5_000_000_000
 MAX_LINE = 256
 TIMING = False  # print the work time of each tick on the console
 TIMING_TICKS = 20  # ticks for each timing print
+# The display is lit 24/7: nudge the whole screen 1 px every 5 minutes so no
+# pixel stays lit in one spot (LCD image retention; design.md 5).
+PIXEL_SHIFT_NS = 5 * 60 * 1_000_000_000
 
 # MEM chart: compressed time axis and zoomed y axis (design.md 5.2)
 MEM_HISTORY_S = 5 * 60  # age of the left edge of the MEM chart
@@ -66,6 +69,14 @@ CHART_Y = (ROW_H - CHART_H) // 2
 BG = 0x000000
 RULE = 0x303030
 STALE_COLOR = 0x505050
+
+
+def pixel_shift(phase):
+    """Root-group offset (x, y) for the retention nudge: four diagonal
+    positions, 1 px each, cycling so every pixel rests in turn. The cycle
+    returns to (0, 0), so content never drifts. At offsets 1 the rightmost
+    chart column and the bottom row clip by 1 px — the edges only."""
+    return phase & 1, (phase >> 1) & 1
 
 
 def dim(color):
@@ -448,6 +459,8 @@ def main():
     work_total = 0
     work_max = 0
     next_tick = time.monotonic_ns() + TICK_NS
+    shift_phase = 0
+    next_shift = time.monotonic_ns() + PIXEL_SHIFT_NS
 
     while True:
         if reader is not None:
@@ -471,6 +484,11 @@ def main():
             if DEMO:
                 latest = demo_message(tick)
                 last_rx = now
+
+            if now >= next_shift:  # retention nudge, rides this tick's refresh
+                next_shift = now + PIXEL_SHIFT_NS
+                shift_phase = (shift_phase + 1) & 3
+                root.x, root.y = pixel_shift(shift_phase)
 
             stale = last_rx is None or now - last_rx > STALE_NS
             for key, row in rows.items():
