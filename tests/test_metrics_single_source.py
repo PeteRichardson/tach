@@ -11,7 +11,7 @@ from conftest import CODE_PATH
 
 
 def test_metrics_entry_drives_row_class_and_formatter(tach_code):
-    _, rows = tach_code.build_display(tach_code.terminalio.FONT, 1)
+    _, rows = tach_code.build_display(tach_code.terminalio.FONT, 1, True)
     for m in tach_code.METRICS:
         row = rows[m.key]
         assert type(row) is m.row_class, f"{m.key}: METRICS row_class not used"

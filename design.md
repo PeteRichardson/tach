@@ -78,7 +78,8 @@ Rules:
 - **Big number:** 5 characters maximum, for example `100%` or `97.4G`. A fixed
   width keeps the chart in the same position when the value changes. Use a
   smooth bitmap font, approximately 36 px high, with `adafruit_bitmap_font`. Do
-  not use the scaled built-in `terminalio` font, because it is blocky.
+  not use the scaled built-in `terminalio` font, because it is blocky. The only
+  exception is the fallback when the big font fails to load (see 6.2).
 - **Chart:** One pixel column for each sample. At 2 Hz, 170 columns show
   approximately 85 seconds of history. (The MEM chart is different. See 5.2.) The chart scrolls from right to left.
   A faster rate gives less history: at 4 Hz, the chart shows only 42 seconds.
@@ -202,6 +203,10 @@ works as in TMOG:
 - `boot.py` enables the second USB serial channel:
   `usb_cdc.enable(console=True, data=True)`. The data channel carries only
   Tach messages, so the messages do not mix with the REPL console.
+- Font failure never stops the device: any exception from loading the big font
+  falls back to the scaled built-in font. The device then shows `NO FONT` in
+  the top-left corner of the screen, because the console print is invisible
+  while the console port stays closed (see README Troubleshooting).
 - `code.py` reads lines from `usb_cdc.data`. It must not block. It reads the
   bytes that are available and keeps a partial line until it gets `\n`.
 - CPU and GPU each have a ring buffer of 170 samples. MEM has a buffer of
