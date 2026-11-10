@@ -7,8 +7,6 @@ single definition: Metric(key, label, color, full_scale, row_class, fmt).
 """
 import re
 
-from conftest import CODE_PATH
-
 
 def test_metrics_entry_drives_row_class_and_formatter(tach_code):
     _, rows = tach_code.build_display(tach_code.terminalio.FONT, 1, True)

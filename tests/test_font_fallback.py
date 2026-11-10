@@ -14,7 +14,6 @@ import sys
 from unittest import mock
 
 import pytest
-
 from conftest import bitmap_font_module
 
 

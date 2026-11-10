@@ -114,6 +114,21 @@ is in `~/Library/Logs/tach-sender.log`.
 When the agent runs, do not also start `uv run tach-sender.py`. Only one
 program can use the data port.
 
+## Development
+
+Set up the host tools once, then run them for every change:
+
+```sh
+uv sync             # install pytest and ruff into .venv
+uv run pytest       # run the tests
+uv run ruff check   # run the lint
+```
+
+GitHub Actions runs both commands on every push and pull request
+(`.github/workflows/ci.yml`). The tests need no device attached: `code.py`
+runs against fake display modules, and the memory tests use recorded
+`macmon pipe` data.
+
 ## Test the display without the Mac
 
 In `CIRCUITPY/code.py`, set `DEMO = True`. The device then shows test data and

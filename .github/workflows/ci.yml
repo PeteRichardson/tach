@@ -1,0 +1,42 @@
+# CI on pull requests and on merges to main. Feature branches without an open
+# PR are covered when the PR opens.
+#
+# pytest runs on macos-latest: tach-sender.py is a macOS tool (libSystem
+# host_statistics64, macmon), and tests/test_memory.py::test_live_used_gb_
+# is_within_total exercises the real ctypes path against the kernel. That
+# test skips itself off macOS, but the rest of the suite only proves what it
+# claims when it runs on the platform the product runs on. Ruff is
+# platform-independent and bills 10x on macOS, so it gets its own Linux job.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Ruff
+        run: uv run ruff check
+
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Pytest
+        run: uv run pytest
