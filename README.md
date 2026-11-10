@@ -139,7 +139,7 @@ does not read USB. Set `DEMO = False` to use real data again.
 | Problem | What to do |
 |---|---|
 | The numbers are grey. | The device got no data for 5 seconds. Make sure that `tach-sender.py` runs. |
-| NO FONT in the corner; blocky numbers. | The big font did not load: the file is missing or damaged, or the `adafruit_bitmap_font` library in `lib/` is broken. Copy a BDF font to `/fonts/tach-36.bdf`, then push RESET. |
+| NO FONT at the top of the screen; blocky numbers. | The big font did not load: the file is missing or damaged, or the `adafruit_bitmap_font` library in `lib/` is broken. Copy a BDF font to `/fonts/tach-36.bdf`, then push RESET. |
 | `found only one Adafruit port` | `boot.py` is not on the device, or you did not push RESET after you copied it. |
 | The script does not find the device. | Run `ls /dev/cu.usbmodem*`. Give the higher-numbered PyPortal port with `--port`. |
 | The MEM chart does not show the full size of a model. | The LLM runtime maps the model file into memory (mmap). See design.md, section 5.1. |

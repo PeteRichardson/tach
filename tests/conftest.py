@@ -58,6 +58,9 @@ class FakeTileGrid:
 
 
 class FakeLabel:
+    # No text-measurement property: the Label on the device build has no
+    # `dimensions` (device AttributeError, 2026-11-09), and code.py must not
+    # depend on one. tests/test_display_rows.py pins that.
     def __init__(self, font, text="", color=None, scale=1):
         self.text = text
         self.color = color

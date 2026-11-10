@@ -53,36 +53,50 @@ to that size.
 
 The display is in landscape mode: 320 × 240 pixels.
 
-There are 3 rows. Each row is 80 pixels high. Each row has 3 parts:
+There are 3 rows. Each row is 80 pixels high. The small label sits in the
+upper-left corner of the row, the big number under it, and the chart fills the
+rest of the row:
 
 ```
-|<-40->|<----- 110 ----->|<---------- 170 ---------->|
- CPU      78%              ╱╲__╱‾‾╲___╱╲
- small    big number       line chart, ~70 px high
- label    ~36 px high      170 px wide = ~85 s at 2 Hz
+|<- 4 ->|<----- 100 ----->|-10-|<----------- 206 ----------->|
+ CPU                         ╱╲__╱‾‾╲___╱╲
+ 78%             whitespace line chart, ~70 px high
+ label + number             206 px wide = ~103 s at 2 Hz
 ```
 
 ```
 ┌────────────────────────────────────────────┐
-│ CPU   78%    ╱╲__╱‾‾╲___╱╲__                │
+│ CPU                       ╱╲__╱‾‾╲___╱╲__ │
+│ 78%                                        │
 ├────────────────────────────────────────────┤
-│ GPU   92%    ___╱‾‾‾‾‾‾‾‾‾‾‾╲_              │
+│ GPU                       ___╱‾‾‾‾‾‾‾‾‾╲_ │
+│ 92%                                        │
 ├────────────────────────────────────────────┤
-│ MEM  97.4G   ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾              │
+│   130G                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾ │
+│ MEM  97.4G    ╱‾‾‾‾‾‾‾‾‾‾╲___╱‾‾‾‾‾‾   │
+│    90.0G   ╱╱                              │
 └────────────────────────────────────────────┘
 ```
 
 Rules:
 
-- **Label:** 3 characters, small font.
-- **Big number:** 5 characters maximum, for example `100%` or `97.4G`. A fixed
-  width keeps the chart in the same position when the value changes. Use a
+- **Label:** 3 characters, the built-in font at twice its size, in the
+  upper-left corner of the row.
+- **Big number:** 5 characters maximum, for example `100%` or `97.4G`,
+  under the label with a 5 px gap, right-aligned at a static x
+  (`NUMBER_RIGHT_X` = 94). The `%` and
+  `G` units line up in one column across the rows, and because x is static,
+  neither the chart nor the units column moves when the value changes. Use a
   smooth bitmap font, approximately 36 px high, with `adafruit_bitmap_font`. Do
   not use the scaled built-in `terminalio` font, because it is blocky. The only
   exception is the fallback when the big font fails to load (see 6.2).
-- **Chart:** One pixel column for each sample. At 2 Hz, 170 columns show
-  approximately 85 seconds of history. (The MEM chart is different. See 5.2.) The chart scrolls from right to left.
-  A faster rate gives less history: at 4 Hz, the chart shows only 42 seconds.
+  The number is drawn twice, 1 px right (`BOLD_SHIFT`), for a bold effect; the
+  weight of a BDF file cannot be changed in code. For crisper bold, supply a
+  bold BDF at the same path and set `BOLD_SHIFT = 0`.
+- **Chart:** One pixel column for each sample. The chart runs from after the
+  number slot to the right screen edge. At 2 Hz, 206 columns show
+  approximately 103 seconds of history. (The MEM chart is different. See 5.2.) The chart scrolls from right to left.
+  A faster rate gives less history: at 4 Hz, the chart shows only ~51 seconds.
 - **Memory unit:** Show GB, not MB. A Mac for LLMs can have 128 GB or more.
 - **Chart scale:** CPU and GPU use a fixed scale of 0–100%. The MEM chart
   zooms to its data. See 5.2.
@@ -133,15 +147,15 @@ second) and sends the maximum value.
 ### 5.2 MEM chart (decided)
 
 On a Mac with much memory (for example 256 GB), a 0-to-total scale shows a
-flat line. And at 2 Hz, 170 columns show only 85 seconds. Thus, the MEM chart
+flat line. And at 2 Hz, 206 columns show only 103 seconds. Thus, the MEM chart
 works as in TMOG:
 
 - **Compressed time axis:** The chart shows the last 5 minutes
   (`MEM_HISTORY_S`). The right columns show one sample each. To the left, the
   time of each column increases exponentially:
   `age(x) = b · (eˣᐟᵇ − 1)` samples, where x is the column from the right edge,
-  and b gives `age(170)` = 5 minutes. At 2 Hz, the right 73 columns show the
-  last minute, and the leftmost column covers approximately 4.5 seconds.
+  and b gives `age(206)` = 5 minutes. At 2 Hz, the right 82 columns show the
+  last minute, and the leftmost column covers approximately 3 seconds.
 - **Minimum and maximum:** Each column shows a line from the lowest to the
   highest sample in its period. Thus, short peaks stay visible.
 - **Time marks:** Faint dotted lines show 1, 2, 3 and 4 minutes ago
@@ -150,12 +164,15 @@ works as in TMOG:
   5 minutes. It is rounded out to a step (0.1, 0.2, 0.5, 1, 2, 5 … GB) that
   gives 5 steps or less. Thus, the scale does not move at each tick. The
   minimum span is 1 GB (`MEM_MIN_SPAN_GB`), so that noise does not look large.
-  Small labels in the top-left and bottom-left corners show the limits.
+  The limits show as small labels to the left of the chart, right-aligned to
+  its left edge, one at the top and one at the bottom, so the line can never
+  cover them. They share the left column with the big number without touching
+  it: the number sits vertically between the two labels.
 - **Storage:** The device keeps all 600 samples, in units of 0.01 GB, in two
   `array('H')` buffers (2.4 KB). In one buffer a gap is 0, and in the other it is
   0xFFFF, so that C-speed `max()` and `min()` on slices skip the gaps. The
   history is in RAM, so after a reset the chart fills again from the right.
-- **Cost:** The device draws all 170 MEM columns again at each tick.
+- **Cost:** The device draws all 206 MEM columns again at each tick.
 
 ## 6. System architecture
 
@@ -204,12 +221,13 @@ works as in TMOG:
   `usb_cdc.enable(console=True, data=True)`. The data channel carries only
   Tach messages, so the messages do not mix with the REPL console.
 - Font failure never stops the device: any exception from loading the big font
-  falls back to the scaled built-in font. The device then shows `NO FONT` in
-  the top-left corner of the screen, because the console print is invisible
+  falls back to the scaled built-in font. The device then shows `NO FONT` at
+  the top of the screen, to the right of the CPU label (the corner belongs to
+  the label), because the console print is invisible
   while the console port stays closed (see README Troubleshooting).
 - `code.py` reads lines from `usb_cdc.data`. It must not block. It reads the
   bytes that are available and keeps a partial line until it gets `\n`.
-- CPU and GPU each have a ring buffer of 170 samples. MEM has a buffer of
+- CPU and GPU each have a ring buffer of 206 samples. MEM has a buffer of
   5 minutes (see 5.2).
 - At each tick (0.5 s, `TICK_NS`), the device updates the big numbers and moves
   each chart by one column. The tick must agree with `SEND_INTERVAL_S` on the
@@ -218,7 +236,10 @@ works as in TMOG:
   which column shows at each position, and the device draws only the new
   column. The MEM chart is drawn again completely at each tick (see 5.2).
 - Measured work for each tick, with a full MEM history: approximately 265 ms
-  average, 278 ms maximum. Thus, a 0.25 s tick is not possible.
+  average, 278 ms maximum (at 170 chart columns). The 206-column layout redraws
+  about 20 percent more per tick, so expect roughly 300–340 ms; still inside
+  the 0.5 s tick. Re-measure with `TIMING` after the layout change. A 0.25 s
+  tick is not possible.
 - If there is no data for 5 seconds, the device shows that the connection is
   stale: the numbers become grey, and the charts show empty columns.
 
