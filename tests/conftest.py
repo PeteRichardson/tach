@@ -7,8 +7,10 @@ code.py with its trailing main() call stripped, so tests can construct the
 classes and call build_display() directly.
 
 The module name is tach_code, not code, so it cannot shadow the stdlib `code`
-module (the same trap tests/test_exit_codes.py notes for sys.path).
+module; the tach_sender loader below names its module tach_sender for the same
+reason.
 """
+import json
 import os
 import sys
 import types
@@ -123,6 +125,26 @@ def bitmap_font_module(exc=None):
         "adafruit_bitmap_font": pkg,
         "adafruit_bitmap_font.bitmap_font": mod,
     }
+
+
+@pytest.fixture(scope="session")
+def tach_sender():
+    """tach-sender.py as a module, despite its hyphenated filename."""
+    import importlib.util
+
+    path = os.path.join(os.path.dirname(__file__), "..", "tach-sender.py")
+    spec = importlib.util.spec_from_file_location("tach_sender", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="session")
+def macmon_lines():
+    """Parsed dicts from tests/fixtures/macmon_pipe.jsonl (recorded `macmon pipe`)."""
+    path = os.path.join(os.path.dirname(__file__), "fixtures", "macmon_pipe.jsonl")
+    with open(path) as f:
+        return [json.loads(line) for line in f if line.strip()]
 
 
 @pytest.fixture(scope="session")
