@@ -4,7 +4,8 @@
 #
 # Libraries (copy to CIRCUITPY/lib): adafruit_display_text, adafruit_bitmap_font.
 # Big-number font: put a BDF or PCF font, approximately 36 px high, at BIG_FONT_PATH.
-# If the font is missing, the device uses the scaled built-in font.
+# If the font is missing or damaged, the device uses the scaled built-in font
+# and shows NO FONT in the top-left corner.
 import array
 import json
 import math
@@ -349,20 +350,30 @@ def load_big_font():
 
         font = bitmap_font.load_font(BIG_FONT_PATH)
         font.load_glyphs("0123456789.%G-")
-        return font, 1
-    except (OSError, ImportError) as e:
+        return font, 1, True
+    except Exception as e:
+        # Any font fault falls back; the fault list is in tests/test_font_fallback.py.
         print("Tach: cannot load", BIG_FONT_PATH, "-", e)
         print("Tach: using the scaled built-in font")
-        return terminalio.FONT, 3
+        return terminalio.FONT, 3, False
 
 
-def build_display(font, scale):
+def build_display(font, scale, big_font_ok):
     root = displayio.Group()
     rows = {}
     for i, m in enumerate(METRICS):
         row = m.row_class(i * ROW_H, m.label, m.color, m.full_scale, font, scale, m.fmt)
         rows[m.key] = row
         root.append(row.group)
+
+    if not big_font_ok:
+        # Global chrome on root, like the rules: the console print in
+        # load_big_font() is invisible unless the console port is open, so
+        # mark the fallback in the top-left corner of the screen.
+        warn = label.Label(terminalio.FONT, text="NO FONT", color=MEM_SCALE_COLOR)
+        warn.anchor_point = (0.0, 0.0)
+        warn.anchored_position = (4, 2)
+        root.append(warn)
 
     rule = displayio.Bitmap(LABEL_W + NUMBER_W + CHART_W, 1, 1)
     rule_palette = displayio.Palette(1)
@@ -374,8 +385,8 @@ def build_display(font, scale):
 
 def main():
     display = board.DISPLAY
-    font, scale = load_big_font()
-    root, rows = build_display(font, scale)
+    font, scale, big_font_ok = load_big_font()
+    root, rows = build_display(font, scale, big_font_ok)
     display.auto_refresh = False
     display.root_group = root
     display.refresh()

@@ -97,6 +97,34 @@ def _fake_modules():
     }
 
 
+def bitmap_font_module(exc=None):
+    """Fake adafruit_bitmap_font package; load_font raises exc when given.
+
+    code.py imports this inside load_big_font(), so tests patch sys.modules
+    at call time; the tach_code fixture only fakes what the import needs.
+    """
+    pkg = types.ModuleType("adafruit_bitmap_font")
+    mod = types.ModuleType("adafruit_bitmap_font.bitmap_font")
+    pkg.bitmap_font = mod
+    if exc is None:
+
+        class GoodFont:
+            def load_glyphs(self, chars):
+                pass
+
+        mod.load_font = lambda path: GoodFont()
+    else:
+
+        def load_font(path):
+            raise exc
+
+        mod.load_font = load_font
+    return {
+        "adafruit_bitmap_font": pkg,
+        "adafruit_bitmap_font.bitmap_font": mod,
+    }
+
+
 @pytest.fixture(scope="session")
 def codepy_source():
     with open(CODE_PATH) as f:

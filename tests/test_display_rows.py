@@ -16,6 +16,6 @@ def test_mem_row_autoscales_and_pushes(tach_code):
     # design.md 5.2: the MEM y axis follows the data, so MemRow ignores its
     # table full_scale. Construction from METRICS must pass the guard, and a
     # push must draw without a fixed scale.
-    _, rows = tach_code.build_display(tach_code.terminalio.FONT, 1)
+    _, rows = tach_code.build_display(tach_code.terminalio.FONT, 1, True)
     rows["mem"].push(3.2)
     rows["cpu"].push(42.0)
