@@ -318,8 +318,12 @@ Next:
    frame round trips in 0.49 ms average, 0.87 ms worst, with a test responder on the Mac. The reply
    is read (`device/src/wire.rs`) into the chart model (`device/src/chart.rs`): one bucket per
    pixel of travel, each with low, high and newest value, placed by its Mac stamp. Every curve is
-   redrawn from the model on every frame. Not yet: the 5-minute memory axis (memory uses the same
-   25 s window as CPU and GPU for now), digits in the number slot, and the staleness rule.
+   redrawn from the model on every frame. The staleness rule (`chart::STALE_MS`, 5 s) is in: a row
+   whose newest Mac stamp is older than 5 s is stale, so a dead macmon stops the GPU row while CPU
+   and memory go on (issue #1). No reply for 5 s blanks every plot instead of moving old curves
+   (ADR-0005, ADR-0006). Until the digits exist, a stale row loses the rule in its number slot.
+   Not yet: the 5-minute memory axis (memory uses the same 25 s window as CPU and GPU for now),
+   and digits in the number slot.
 7. Started: `tach-sender.py` answers each `{"pull":N}` with the Q36 keys and the same `pull` value,
    `ok: false` when macmon is stale. CPU from per-core Mach ticks, memory low/high since the last
    reply, GPU from macmon at 10 Hz while the v2 device is connected. A thread serves the v2 device

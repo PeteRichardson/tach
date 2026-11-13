@@ -138,9 +138,10 @@ fn main() -> ! {
     // RA8875, so the numbers measured here carry over to the target panel.
     let frame_us = TICKS_PER_S / FPS as u64;
     let mut model = chart::Model::new();
-    // Mac monotonic ms minus device ms, from the newest reply. None until the first reply, and
-    // until then there is no Mac time to draw at.
+    // Mac monotonic ms minus device ms, from the newest reply, and the device time of that reply.
+    // Both None until the first reply. chart::mac_now turns them into the Mac time of a frame.
     let mut mac_offset_ms: Option<i64> = None;
+    let mut last_reply_us: Option<u64> = None;
 
     let mut frames: u32 = 0;
     let mut draw_us_max: u64 = 0;
@@ -163,12 +164,20 @@ fn main() -> ! {
         let t0 = timer.get_counter().ticks();
 
         // Every curve moves on every frame, whether or not a sample came in: travel follows the
-        // clock (ADR-0002). The reply read at the end of this frame shows on the next one.
-        if let Some(offset) = mac_offset_ms {
-            let now = ((t0 / 1000) as i64 + offset) as u64;
-            for (series, row) in model.rows.iter().zip(rows.iter()) {
-                chart::draw(series, row, now, |op| panel.apply(op));
+        // clock (ADR-0002). The reply read at the end of this frame shows on the next one. With
+        // no Mac time (no reply yet, or none for STALE_MS) the plots are blank, and every row is
+        // stale.
+        let now = chart::mac_now(mac_offset_ms, last_reply_us, t0);
+        let mut stale = [true; layout::ROWS];
+        for ((series, row), stale) in model.rows.iter().zip(rows.iter()).zip(stale.iter_mut()) {
+            match now {
+                Some(now) => {
+                    chart::draw(series, row, now, |op| panel.apply(op));
+                    *stale = series.is_stale(now);
+                }
+                None => chart::blank(row, |op| panel.apply(op)),
             }
+            mark_slot(&mut panel, row, !*stale);
         }
 
         let t1 = timer.get_counter().ticks();
@@ -196,6 +205,7 @@ fn main() -> ! {
                                 // 12 px/s that is well under a pixel, so it is not corrected.
                                 if let Some(t) = r.t {
                                     mac_offset_ms = Some(t as i64 - (now / 1000) as i64);
+                                    last_reply_us = Some(now);
                                 }
                                 model.take(&r);
                             }
@@ -226,7 +236,7 @@ fn main() -> ! {
         let span = t2 - window_start;
         if span >= TICKS_PER_S {
             rprintln!(
-                "fps {}  draw_us {}  present_us {} ({} B)  rows {}  KB/s {}  rtt_us avg {} max {}  ok {} miss {} unsent {} unread {}  cpu {:?} gpu {:?} mem% {:?}",
+                "fps {}  draw_us {}  present_us {} ({} B)  rows {}  KB/s {}  rtt_us avg {} max {}  ok {} miss {} unsent {} unread {}  cpu {:?} gpu {:?} mem% {:?}  stale {:?}",
                 frames as u64 * TICKS_PER_S / span,
                 draw_us_max,
                 present_us_max,
@@ -241,7 +251,8 @@ fn main() -> ! {
                 unread,
                 model.rows[chart::CPU].newest(),
                 model.rows[chart::GPU].newest(),
-                model.rows[chart::MEM].newest()
+                model.rows[chart::MEM].newest(),
+                stale
             );
             window_start = t2;
             frames = 0;
@@ -347,8 +358,8 @@ fn selftest<P: Panel>(panel: &mut P, timer: &hal::timer::Timer<hal::timer::Copya
     wait_us(timer, 1_500_000);
 }
 
-/// Static chrome: the panel border, each chart frame, and a rule through the
-/// number slot so the layout is visible before any glyph atlas exists.
+/// Static chrome: the panel border and each chart frame. The number slot is drawn per frame by
+/// `mark_slot`.
 fn draw_chrome<P: Panel>(panel: &mut P, rows: &[layout::Row; layout::ROWS]) {
     let (w, h) = panel.size();
     panel.apply(Op::Clear { on: false });
@@ -363,12 +374,19 @@ fn draw_chrome<P: Panel>(panel: &mut P, rows: &[layout::Row; layout::ROWS]) {
             t: 1,
             on: true,
         });
-        panel.apply(Op::Line {
-            x0: r.slot_x as i32,
-            y0: (r.chart_y + r.chart_h / 2) as i32,
-            x1: (r.chart_x - 2) as i32,
-            y1: (r.chart_y + r.chart_h / 2) as i32,
-            on: true,
-        });
     }
+}
+
+/// The number slot until the glyph atlas exists: a rule through the slot, drawn at the line level
+/// while the row is live and at the dim level when it is stale. Dim is the background on the SHARP
+/// panel (docs/device-v2.md, Four drawing levels), so a stale row's rule disappears. The digits
+/// take the same flag when they come.
+fn mark_slot<P: Panel>(panel: &mut P, r: &layout::Row, live: bool) {
+    panel.apply(Op::Line {
+        x0: r.slot_x as i32,
+        y0: (r.chart_y + r.chart_h / 2) as i32,
+        x1: (r.chart_x - 2) as i32,
+        y1: (r.chart_y + r.chart_h / 2) as i32,
+        on: live,
+    });
 }

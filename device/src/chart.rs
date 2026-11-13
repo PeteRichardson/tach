@@ -23,6 +23,17 @@ pub const BUCKETS: usize = 400;
 /// this is several missed samples: a stalled source shows as a break, not as a flat line.
 pub const GAP_MS: u64 = 1500;
 
+/// The staleness limit (GLOSSARY, "Stale"), one limit for both halves of the rule:
+///
+/// * A row whose newest sample is older than this, by Mac time, is stale: a dead source must not
+///   look live (issue #1).
+/// * When no reply came for this long, there is no Mac time to draw at, and the panel blanks
+///   instead of freezing (ADR-0005, ADR-0006).
+///
+/// 5 s, the same as v1 (`STALE_NS` in code.py) and macmon's limit in tach-sender.py
+/// (`MACMON_STALE_S`), so all three say one thing (issue #27).
+pub const STALE_MS: u64 = 5000;
+
 /// Row order on the panel.
 pub const CPU: usize = 0;
 pub const GPU: usize = 1;
@@ -89,6 +100,11 @@ impl Series {
         (b.span == span).then_some(b)
     }
 
+    /// True if the newest sample is older than `STALE_MS` at Mac time `now`, or if there is none.
+    pub fn is_stale(&self, now: u64) -> bool {
+        self.last_t.map_or(true, |t| now.saturating_sub(t) > STALE_MS)
+    }
+
     /// The newest value taken, for the telemetry line.
     pub fn newest(&self) -> Option<f32> {
         self.bucket(self.last_t? / BUCKET_MS).map(|b| b.last)
@@ -124,13 +140,33 @@ impl Model {
     }
 }
 
+/// Mac time for a frame at device time `now_us`, or None when there is nothing to draw at.
+///
+/// `offset_ms` is Mac ms minus device ms from the newest reply, and `last_reply_us` is the device
+/// time of that reply. With no reply yet, or none for longer than `STALE_MS`, this is None and
+/// the caller blanks the plots: the device clock would keep the curves moving, and an old curve
+/// that moves looks live.
+pub fn mac_now(offset_ms: Option<i64>, last_reply_us: Option<u64>, now_us: u64) -> Option<u64> {
+    let last = last_reply_us?;
+    if now_us.saturating_sub(last) > STALE_MS * 1000 {
+        return None;
+    }
+    Some(((now_us / 1000) as i64 + offset_ms?) as u64)
+}
+
+/// Clear the plot area of `row`: what a row shows when the link is stale.
+pub fn blank(row: &Row, mut op: impl FnMut(Op)) {
+    let (left, top, w, h) = row.plot();
+    op(Op::Rect { x: left as i32, y: top as i32, w, h, fill: true, t: 0, on: false });
+}
+
 /// Draw `series` into the plot area of `row` as it stands at Mac time `now`: the plot is cleared,
 /// "now" is the right edge, and older times sit further left at `TRAVEL_PX_PER_S`. Each bucket
 /// is a vertical stroke from its low to its high, joined to the next bucket by its newest value.
 /// A short tick marks each `GRID_TICK_S` of Mac time, so the ruler travels with the curve.
 pub fn draw(series: &Series, row: &Row, now: u64, mut op: impl FnMut(Op)) {
-    let (left, top, w, h) = row.plot();
-    op(Op::Rect { x: left as i32, y: top as i32, w, h, fill: true, t: 0, on: false });
+    blank(row, &mut op);
+    let (left, top, w, _) = row.plot();
     let left = left as i32;
     let right = left + w as i32 - 1;
     // Rounded to the nearest pixel. A stamp later than `now` (clock jitter) sits on the edge.
@@ -304,6 +340,41 @@ mod tests {
             })
             .collect();
         assert_eq!(ticks, vec![right - 30, right - 90, right - 150]);
+    }
+
+    #[test]
+    fn a_row_is_stale_when_its_newest_sample_is_older_than_the_limit() {
+        let mut s = Series::new();
+        assert!(s.is_stale(10_000), "no sample yet");
+        s.add(10_000, 50.0, 50.0, 50.0);
+        assert!(!s.is_stale(10_000 + STALE_MS));
+        assert!(s.is_stale(10_000 + STALE_MS + 1));
+    }
+
+    #[test]
+    fn a_repeated_stamp_does_not_keep_a_row_fresh() {
+        // The Mac sends GPU in every reply, with the stamp macmon gave it. When macmon stops, the
+        // stamp stops too, and the row must go stale while replies still come in.
+        let mut s = Series::new();
+        s.add(10_000, 50.0, 50.0, 50.0);
+        for _ in 0..10 {
+            s.add(10_000, 50.0, 50.0, 50.0);
+        }
+        assert!(s.is_stale(10_000 + STALE_MS + 1));
+    }
+
+    #[test]
+    fn mac_time_follows_the_device_clock_from_the_last_reply() {
+        // Reply at device 2.000 s carried Mac t = 1_000_000 ms: offset 998_000.
+        assert_eq!(mac_now(Some(998_000), Some(2_000_000), 2_500_000), Some(1_000_500));
+    }
+
+    #[test]
+    fn no_mac_time_before_the_first_reply_or_after_the_link_goes_stale() {
+        assert_eq!(mac_now(None, None, 1_000_000), None);
+        let last = 2_000_000;
+        assert!(mac_now(Some(0), Some(last), last + STALE_MS * 1000).is_some());
+        assert_eq!(mac_now(Some(0), Some(last), last + STALE_MS * 1000 + 1), None);
     }
 
     #[test]
