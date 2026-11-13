@@ -24,6 +24,8 @@ issue #38 needs.
 - The wire carries per-metric arrival stamps, because the three metrics have different freshness:
   CPU ticks change every poll, memory about 10 times a second, GPU about 6.5 (see
   `docs/device-v2.md`, Mac-side sources).
+- Each pull carries a number, `{"pull":N}`, and the reply carries the same `"pull":N`. A reply that
+  arrives after its frame deadline then cannot be taken for the answer to the next pull.
 - Link round trip is included in the frame budget. Over USB CDC full speed this is sub-millisecond;
   measure it on the scaffold.
 - If a reply is late, the frame draws with the last known samples and the curve keeps travelling by

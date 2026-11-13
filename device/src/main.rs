@@ -249,13 +249,13 @@ fn main() -> ! {
         let mut req = LineBuf::new();
         let _ = writeln!(req, "{{\"pull\":{}}}", pull_seq);
         let mut tag = LineBuf::new();
-        let _ = write!(tag, "\"pull\":{},", pull_seq);
+        let _ = write!(tag, "\"pull\":{}", pull_seq);
         if link::send(req.as_bytes()) {
             let deadline = t0 + frame_us;
             loop {
                 let now = timer.get_counter().ticks();
                 if let Some(n) = link::take_line(&mut reply) {
-                    if contains(&reply[..n], tag.as_bytes()) {
+                    if answers(&reply[..n], tag.as_bytes()) {
                         rtt_us_max = rtt_us_max.max(now - t2);
                         rtt_us_sum += now - t2;
                         replies += 1;
@@ -347,9 +347,11 @@ impl core::fmt::Write for LineBuf {
     }
 }
 
-/// True if `needle` occurs in `hay`.
-fn contains(hay: &[u8], needle: &[u8]) -> bool {
-    hay.windows(needle.len()).any(|w| w == needle)
+/// True if the reply line carries `tag` (`"pull":N`) as a whole value: a `,` or `}` must come
+/// next, so `"pull":12` does not match a reply to pull 123.
+fn answers(line: &[u8], tag: &[u8]) -> bool {
+    line.windows(tag.len() + 1)
+        .any(|w| &w[..tag.len()] == tag && matches!(w[tag.len()], b',' | b'}'))
 }
 
 /// Integer-range sine (Bhaskara I), good enough for a fake curve on a scaffold.

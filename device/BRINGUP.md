@@ -267,7 +267,7 @@ that the rp-hal examples use), serial number `scaffold`. On macOS the port is
 `/dev/cu.usbmodemscaffold1`. It is a different VID from the PyPortal (`239a`), so `tach-sender.py`
 does not find it yet.
 
-Probe: after each present the loop sends `{"pull":N}` and spins until a line with `"pull":N,`
+Probe: after each present the loop sends `{"pull":N}` and spins until a line with `"pull":N`
 comes back, or until the frame deadline. A test responder on the Mac (Python, pyserial) answered
 each pull with a Q36-shaped reply of about 190 B. 60 s at 30 fps:
 
@@ -280,5 +280,5 @@ frame budget at 30 fps is now about 2.0 + 7.0 + 0.9 = 9.9 ms of 33.3 ms.
 
 Until the Mac opens the port (DTR low), the device does not send, and counts the pull as `unsent`.
 
-Not settled yet: the request format. `{"pull":N}` is a probe, so that a late reply cannot be
-taken for the answer to the next pull. The Q36 reply keys have no sequence number.
+Request format, settled after this measurement: `{"pull":N}`, and the reply carries the same
+`"pull":N` as a Q36 key, so a late reply cannot be taken for the answer to the next pull.

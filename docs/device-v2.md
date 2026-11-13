@@ -191,6 +191,10 @@ the RP2350's 520 KB RAM. Not a constraint.
 The Mac answers with every metric it holds plus the arrival time of each, so the two sides have no
 rate to agree on and the frame grid stays even because the device owns the clock.
 
+The request is one line, `{"pull":N}`, with N counting up from 1 for each pull. The reply carries
+the same `"pull":N`, so the device can tell a reply to this pull from a late reply to an earlier
+one, and drop the late one.
+
 **Sources are split** ([ADR-0007](adr/0007-cpu-from-mach-ticks-macmon-stays-for-gpu-only.md)): CPU
 ticks read natively at the frame rate, memory read natively, `macmon` kept for GPU alone at about
 9 Hz. Three freshness classes share one reply, and each sample carries its own stamp — which is
@@ -280,7 +284,7 @@ format both follow from these.
 | Sampling | ~8 Hz from macmon, native calls far faster, time-placed regardless | ADR-0002 |
 | Retention nudge | 1 px every 5 min, 4 diagonal positions, as one whole-layer scroll (Q39) | free on the controller |
 | Sender language | Keep Python 3 + pyserial (Q38) | measured 26.5 Hz against a 30 Hz request; Python was never the limit |
-| Wire keys | `v, t, hz, cpu, tc, gpu, tg, mem, mem_lo, mem_hi, tm, mem_total, ok` (Q36) | unknown keys ignored, as v1 promises |
+| Wire keys | `pull, v, t, hz, cpu, tc, gpu, tg, mem, mem_lo, mem_hi, tm, mem_total, ok` (Q36) | unknown keys ignored, as v1 promises; `pull` echoes the request so a late reply is not taken for this one |
 | Issue triage | Deferred until the new device boots; PyPortal-only issues close as superseded (Q40) | avoids closing issues against hardware still in service |
 | v1 archive | CircuitPython code to `legacy/pyportal/` at retirement (Q40) | keeps the repo root for v2 |
 
@@ -306,8 +310,9 @@ Next:
    `SpiBus::write` waited after each byte; `device/src/fifo_spi.rs` keeps the FIFO full.
 6. Started: USB CDC on the device (`device/src/link.rs`, stack in the USB interrupt). One pull
    per frame round trips in 0.49 ms average, 0.87 ms worst, with a test responder on the Mac. Still
-   to do: settle the pull request format, and read the reply into the chart model.
-7. Change `tach-sender.py`: native CPU ticks, answer one pull per frame with the Q36 keys,
+   to do: read the reply into the chart model.
+7. Change `tach-sender.py`: native CPU ticks, answer each `{"pull":N}` with the Q36 keys and the
+   same `pull` value,
    `ok: false` when macmon is dead.
 8. When the RA8875 kit lands: port the constants to 480×272, write the RA8875 driver, measure the
    real SPI ceiling.
