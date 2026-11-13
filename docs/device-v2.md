@@ -248,12 +248,12 @@ they are close (native 1.4–4.8 %, macmon 1.5–3.0 %) but they are not the sam
 
 ## Open frontier
 
-Only two things are still unknown, and both need hardware in hand.
+Only one thing is still unknown, and it needs hardware in hand.
 
 1. **RA8875 SPI clock** — the reference driver uses 12 MHz; the datasheet maximum and the real limit
    with jumper wires are both unknown. Blocks the frame budget arithmetic on the target panel.
-2. **Pull round trip** — the frame budget now includes a USB CDC round trip. Unknown until measured
-   on the scaffold. Blocks the frame rate promise.
+2. Closed, 2026-11-12: **pull round trip**. Measured on the scaffold over USB CDC full speed: average
+   0.49 ms, worst 0.87 ms in 1789 pulls at 30 fps, no reply missed. It fits the frame budget.
 
 Everything else below is settled. Change one and say so, because the layout constants and the wire
 format both follow from these.
@@ -304,7 +304,9 @@ Next:
 
 5. Done: present now runs at wire speed (7.0 ms for 9362 B at 10.71 MHz). The HAL's
    `SpiBus::write` waited after each byte; `device/src/fifo_spi.rs` keeps the FIFO full.
-6. USB CDC on the device, and measure the round trip of one pull per frame.
+6. Started: USB CDC on the device (`device/src/link.rs`, stack in the USB interrupt). One pull
+   per frame round trips in 0.49 ms average, 0.87 ms worst, with a test responder on the Mac. Still
+   to do: settle the pull request format, and read the reply into the chart model.
 7. Change `tach-sender.py`: native CPU ticks, answer one pull per frame with the Q36 keys,
    `ok: false` when macmon is dead.
 8. When the RA8875 kit lands: port the constants to 480×272, write the RA8875 driver, measure the

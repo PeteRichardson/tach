@@ -1,6 +1,6 @@
 //! Tach device firmware, milestone 1: bring up the SHARP scaffold, prove the geometry, and measure
-//! the frame cost. No wire protocol yet — this binary answers the two questions that block
-//! everything else: does the 400x240 geometry match the glass, and what does a refresh cost.
+//! the frame cost and the pull round trip. The pull is a probe for now: the demo curves are still
+//! fake, and the reply is only timed, not read.
 //!
 //! Wiring: device/WIRING.md. Pins: SPI0 SCK GP18, MOSI GP19, CS GP17 (GPIO, active high),
 //! DISP GP16 (GPIO). GP20/GP21 stay free for SWD.
@@ -9,6 +9,8 @@
 #![no_main]
 
 use panic_halt as _;
+
+use core::fmt::Write as _;
 
 use embedded_hal::spi::MODE_1;
 use fugit::RateExtU32;
@@ -25,6 +27,7 @@ use rp235x_hal::{
 mod fifo_spi;
 mod framebuf;
 mod layout;
+mod link;
 mod ops;
 mod sharp;
 
@@ -108,6 +111,9 @@ fn main() -> ! {
 
     let timer = hal::timer::Timer::new_timer0(pac.TIMER0, &mut resets, &clocks);
 
+    // USB first, so the host can enumerate the port while the self-test runs.
+    link::init(pac.USB, pac.USB_DPRAM, clocks.usb_clock, &mut resets);
+
     // The divider cannot make every rate, so log the one the bus really runs at: 10.71 MHz for a
     // 12 MHz request. Setting it again writes the same divider.
     let spi_hz = spi.set_baudrate(clocks.peripheral_clock.freq(), SPI_HZ.Hz()).to_Hz();
@@ -147,6 +153,16 @@ fn main() -> ! {
     let mut present_bytes_at_max: usize = 0;
     let mut bytes_total: usize = 0;
     let mut window_start: u64 = timer.get_counter().ticks();
+
+    // Pull round trip (ADR-0006, open frontier item 2). One pull after each present, then wait
+    // for the reply in the idle part of the frame. The demo does not use the reply yet.
+    let mut pull_seq: u32 = 0;
+    let mut reply = [0u8; link::LINE_MAX];
+    let mut rtt_us_max: u64 = 0;
+    let mut rtt_us_sum: u64 = 0;
+    let mut replies: u32 = 0;
+    let mut misses: u32 = 0; // pull sent, no matching reply before the frame deadline
+    let mut unsent: u32 = 0; // port not open, or no room in the USB buffer
 
     loop {
         let t0 = timer.get_counter().ticks();
@@ -228,6 +244,33 @@ fn main() -> ! {
         panel.present();
         let t2 = timer.get_counter().ticks();
 
+        // Pull, then wait for the reply until the frame deadline.
+        pull_seq = pull_seq.wrapping_add(1);
+        let mut req = LineBuf::new();
+        let _ = writeln!(req, "{{\"pull\":{}}}", pull_seq);
+        let mut tag = LineBuf::new();
+        let _ = write!(tag, "\"pull\":{},", pull_seq);
+        if link::send(req.as_bytes()) {
+            let deadline = t0 + frame_us;
+            loop {
+                let now = timer.get_counter().ticks();
+                if let Some(n) = link::take_line(&mut reply) {
+                    if contains(&reply[..n], tag.as_bytes()) {
+                        rtt_us_max = rtt_us_max.max(now - t2);
+                        rtt_us_sum += now - t2;
+                        replies += 1;
+                        break;
+                    }
+                }
+                if now >= deadline {
+                    misses += 1;
+                    break;
+                }
+            }
+        } else {
+            unsent += 1;
+        }
+
         draw_us_max = draw_us_max.max(t1 - t0);
         if t2 - t1 > present_us_max {
             present_us_max = t2 - t1;
@@ -241,13 +284,18 @@ fn main() -> ! {
         let span = t2 - window_start;
         if span >= TICKS_PER_S {
             rprintln!(
-                "fps {}  draw_us {}  present_us {} ({} B)  rows {}  KB/s {}",
+                "fps {}  draw_us {}  present_us {} ({} B)  rows {}  KB/s {}  rtt_us avg {} max {}  ok {} miss {} unsent {}",
                 frames as u64 * TICKS_PER_S / span,
                 draw_us_max,
                 present_us_max,
                 present_bytes_at_max,
                 panel.last_flush_rows,
-                bytes_total as u64 * TICKS_PER_S / span / 1024
+                bytes_total as u64 * TICKS_PER_S / span / 1024,
+                rtt_us_sum / (replies.max(1) as u64),
+                rtt_us_max,
+                replies,
+                misses,
+                unsent
             );
             window_start = t2;
             frames = 0;
@@ -255,15 +303,53 @@ fn main() -> ! {
             present_us_max = 0;
             present_bytes_at_max = 0;
             bytes_total = 0;
+            rtt_us_max = 0;
+            rtt_us_sum = 0;
+            replies = 0;
+            misses = 0;
+            unsent = 0;
         }
 
         // Pace to the deadline of this frame, so a slow frame cannot cause a burst of catch-up
-        // frames.
-        let spent = t2 - t0;
+        // frames. The pull wait above may already have used some or all of it.
+        let spent = timer.get_counter().ticks() - t0;
         if spent < frame_us {
             wait_us(&timer, frame_us - spent);
         }
     }
+}
+
+/// A short line built with `write!`, for the pull request and the tag that matches its reply.
+struct LineBuf {
+    buf: [u8; 32],
+    len: usize,
+}
+
+impl LineBuf {
+    fn new() -> Self {
+        Self { buf: [0; 32], len: 0 }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+}
+
+impl core::fmt::Write for LineBuf {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let end = self.len + s.len();
+        if end > self.buf.len() {
+            return Err(core::fmt::Error);
+        }
+        self.buf[self.len..end].copy_from_slice(s.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+
+/// True if `needle` occurs in `hay`.
+fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
 }
 
 /// Integer-range sine (Bhaskara I), good enough for a fake curve on a scaffold.

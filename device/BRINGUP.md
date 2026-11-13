@@ -254,3 +254,31 @@ clock source. It is already far above the LS027B7DH01 datasheet figure.
 Not tried: exactly 12 MHz. That needs a different clk_peri, for example 48 MHz from PLL_USB
 (48 / (2 * 2) = 12 MHz). It could give at most 11% on a panel that the RA8875 will replace, and
 it has less margin than 10.71 MHz, which works.
+
+## 2026-11-12: USB CDC up — pull round trip measured
+
+`device/src/link.rs` runs `usb-device` 0.3 and `usbd-serial` 0.2 on the RP2350 USB controller.
+The stack runs in the `USBCTRL_IRQ` handler, because the frame loop busy-waits for 7 ms in present
+and the host expects quick answers on the control endpoint. The handler joins bytes into lines; the
+loop takes the newest complete line.
+
+The device enumerates as `tach device`, VID:PID `16c0:27dd` (the pid.codes test pair for CDC-ACM
+that the rp-hal examples use), serial number `scaffold`. On macOS the port is
+`/dev/cu.usbmodemscaffold1`. It is a different VID from the PyPortal (`239a`), so `tach-sender.py`
+does not find it yet.
+
+Probe: after each present the loop sends `{"pull":N}` and spins until a line with `"pull":N,`
+comes back, or until the frame deadline. A test responder on the Mac (Python, pyserial) answered
+each pull with a Q36-shaped reply of about 190 B. 60 s at 30 fps:
+
+| Pulls answered | Missed | Round trip, average | Round trip, worst |
+| --- | --- | --- | --- |
+| 1789 | 0 | 494 us | 869 us |
+
+The frame rate stayed at 29–30 fps, and draw and present did not change (2.0 ms, 7.0 ms). The
+frame budget at 30 fps is now about 2.0 + 7.0 + 0.9 = 9.9 ms of 33.3 ms.
+
+Until the Mac opens the port (DTR low), the device does not send, and counts the pull as `unsent`.
+
+Not settled yet: the request format. `{"pull":N}` is a probe, so that a late reply cannot be
+taken for the answer to the next pull. The Q36 reply keys have no sequence number.
