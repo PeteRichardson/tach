@@ -2,6 +2,11 @@
 
 Status: v0.1 done, 2026-11-05. The display updates two times each second.
 
+> **v2 is in design.** This document describes v1, the Adafruit PyPortal build, and stays as the
+> record of what shipped. The next design — RP2350, RA8875 colour panel, smooth chart motion — is
+> in [docs/device-v2.md](docs/device-v2.md), with decisions in
+> [docs/adr/](docs/adr/). Do not edit v1 behaviour here to match v2.
+
 ## 1. Purpose
 
 Tach is a small external display that shows live performance data for a Mac.
