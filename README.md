@@ -20,7 +20,7 @@ The full design is in [design.md](design.md).
 |---|---|---|
 | `boot.py` | PyPortal | Enables a second USB serial channel for Tach data. |
 | `code.py` | PyPortal | Reads the data and shows the display. |
-| `tach-sender.py` | Mac | Reads CPU, GPU and memory data and sends one line each 0.5 seconds. |
+| `tach-sender.py` | Mac | Reads CPU, GPU and memory data. Sends one line each 0.5 seconds to the PyPortal, and answers each pull from the v2 device (`device/`). |
 
 ## Requirements
 

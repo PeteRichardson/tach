@@ -216,16 +216,22 @@ thing as data freshness, so both were measured.
 
 | Source | Cost per read | Ceiling | Value actually changes at | Verdict |
 | --- | --- | --- | --- | --- |
-| `host_statistics(HOST_CPU_LOAD_INFO)` — CPU ticks | **1.3 µs** | ~700 kHz | every poll, ~26 Hz when asked at 30 Hz | **use this** |
+| `host_statistics(HOST_CPU_LOAD_INFO)` — CPU ticks, host-wide | **1.3 µs** | ~700 kHz | ~~every poll~~ **about 1 Hz** on macOS 27 (re-measured 2026-11-12) | too stale |
+| `host_processor_info(PROCESSOR_CPU_LOAD_INFO)` — CPU ticks, per core | 22 µs from Python | ~45 kHz | every few ms; ~133 ticks per 33 ms window over 36 cores | **use this** |
 | `host_statistics64(HOST_VM_INFO64)` — memory | **1 µs** | ~1 MHz | ~10 Hz (page counts move constantly) | already native, keep |
 | IORegistry `IOAccelerator` → `PerformanceStatistics` | 36 µs | ~28 kHz | **~0.3 Hz** | too stale for GPU |
 | `macmon pipe -i 33` | subprocess, ~29 keys | **8.5–9.3 Hz** | ~6.5 Hz for `gpu_active_ratio` | **only GPU source that is fresh** |
 
 Surprises:
 
-- **CPU was never the problem.** The Mach call costs 1.3 µs and ticks run at ~3.5 kHz (about
-  0.28 ms per tick), so a 33 ms window holds ~118 ticks — enough resolution for a percent readout.
-  v1 gets CPU from `macmon` and is therefore capped at macmon's rate for no reason.
+- **CPU was never the problem.** Ticks run at ~3.5 kHz over 36 cores (about 0.28 ms per tick), so
+  a 33 ms window holds ~118 ticks — enough resolution for a percent readout. v1 gets CPU from
+  `macmon` and is therefore capped at macmon's rate for no reason.
+- **Correction, 2026-11-12: read the per-core counters.** On macOS 27 the host-wide sum from
+  `host_statistics(HOST_CPU_LOAD_INFO)` stayed the same for about 1 s at a time, at idle and with
+  one core busy, and then moved in one burst. The per-core counters from `host_processor_info`
+  moved 1192 times in 3 s with no gap over 3 ms. Over 33 ms windows at idle they gave a median of
+  2.2 %, against 2.5 % pooled over the same 2 s, so short windows are not biased.
 - **The public GPU counter is worse than macmon, not better.** `IOAccelerator`'s
   `PerformanceStatistics` has `Device Utilization %` and `Renderer Utilization %`, reads in 36 µs, and
   sits under 28 kHz — but while GPU work was running the value changed only 4 times in 12 seconds,
@@ -311,8 +317,10 @@ Next:
 6. Started: USB CDC on the device (`device/src/link.rs`, stack in the USB interrupt). One pull
    per frame round trips in 0.49 ms average, 0.87 ms worst, with a test responder on the Mac. Still
    to do: read the reply into the chart model.
-7. Change `tach-sender.py`: native CPU ticks, answer each `{"pull":N}` with the Q36 keys and the
-   same `pull` value,
-   `ok: false` when macmon is dead.
+7. Started: `tach-sender.py` answers each `{"pull":N}` with the Q36 keys and the same `pull` value,
+   `ok: false` when macmon is stale. CPU from per-core Mach ticks, memory low/high since the last
+   reply, GPU from macmon at 10 Hz while the v2 device is connected. A thread serves the v2 device
+   beside the v1 push loop, so the PyPortal keeps working. Measured with the scaffold: 0.41 ms
+   average round trip, no miss in 20 s.
 8. When the RA8875 kit lands: port the constants to 480×272, write the RA8875 driver, measure the
    real SPI ceiling.

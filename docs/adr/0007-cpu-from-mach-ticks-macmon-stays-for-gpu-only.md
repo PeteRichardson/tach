@@ -1,6 +1,6 @@
 # CPU comes from Mach ticks; macmon stays for GPU only
 
-The sender reads CPU usage natively with `host_statistics(HOST_CPU_LOAD_INFO)` at the frame rate and
+The sender reads CPU usage natively from the Mach tick counters at the frame rate and
 keeps the `macmon` subprocess for the GPU number alone. CPU therefore means
 `busy / (busy + idle)` across all cores — the definition Activity Monitor uses — instead of
 macmon's `cpu_active_ratio`.
@@ -16,6 +16,12 @@ Taking CPU from macmon inherits that ceiling for no reason.
 changed 4 times in 12 seconds during GPU work, while `gpu_active_ratio` from macmon changed about
 6.5 times per second. macmon reads the private `IOReport` API; the registry key is a stale mirror.
 Reimplementing `IOReport` in Rust means owning the fragile part ourselves, for no gain.
+
+**Correction, 2026-11-12.** The host-wide call, `host_statistics(HOST_CPU_LOAD_INFO)`, moved only
+about once a second on macOS 27, so it cannot feed a per-frame number. The per-core call,
+`host_processor_info(PROCESSOR_CPU_LOAD_INFO)`, moves every few milliseconds and costs about 22 µs
+from Python. The sender sums the per-core ticks. The decision and the CPU definition do not change;
+only the call does. Evidence: `docs/device-v2.md`, Mac-side sources.
 
 ## Consequences
 
