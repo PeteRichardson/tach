@@ -37,8 +37,9 @@ use sharp::Sharp;
 
 /// Board crystal on a Pico 2.
 const XOSC_HZ: u32 = 12_000_000;
-/// SPI clock. 12 MHz is what the SHARP ecosystem uses; the honest ceiling is a measurement, not a
-/// datasheet figure. Raise it here once the self-test is stable.
+/// SPI clock request. From a 150 MHz clk_peri the divider gives 10.71 MHz for this, and the next
+/// step up is 12.5 MHz. Measured on the glass: 10.71 MHz works, 12.5 MHz leaves the panel blank.
+/// See device/BRINGUP.md.
 const SPI_HZ: u32 = 12_000_000;
 /// Target frames per second for the motion demo.
 const FPS: u32 = 30;

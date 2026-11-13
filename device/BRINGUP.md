@@ -239,3 +239,18 @@ shows the real clock: `400x240 @ 10714285 Hz SPI (12000000 Hz requested)`. The b
 removed.
 
 Still open from the options above: 12.5 MHz (test on the glass), and the shift volume.
+
+## 2026-11-12: 12.5 MHz SPI fails — 10.71 MHz is the ceiling at clk_peri 150 MHz
+
+`SPI_HZ = 12_500_000` gives exactly 12.5 MHz (prescale 2, postdiv 5). The worst present went to
+6001 us for 9362 B, as calculated, but the panel was **blank**. The core ran (DHCSR `0x05100001`)
+and RTT showed 30 fps, so the firmware was not the problem. When I set it back to 12 MHz requested
+(10.71 MHz), with no other change, the image came back.
+
+From a 150 MHz clk_peri with prescale 2, the rates are 150 / (2 * (1 + postdiv)): 12.5 MHz, then
+10.71 MHz. There is nothing between them, so 10.71 MHz is the highest rate that works with this
+clock source. It is already far above the LS027B7DH01 datasheet figure.
+
+Not tried: exactly 12 MHz. That needs a different clk_peri, for example 48 MHz from PLL_USB
+(48 / (2 * 2) = 12 MHz). It could give at most 11% on a panel that the RA8875 will replace, and
+it has less margin than 10.71 MHz, which works.
