@@ -20,6 +20,8 @@ usb-device = "0.3.2"
 usbd-serial = "0.2.2"
 static_cell = "2.1.1"
 critical-section = "1.2"
+# expf for the memory row's compressed axis: core has no transcendental functions.
+libm = "0.2"
 
 [features]
 default = ["rtt"]

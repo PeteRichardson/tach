@@ -141,6 +141,7 @@ fn main() -> ! {
     // RA8875, so the numbers measured here carry over to the target panel.
     let frame_us = TICKS_PER_S / FPS as u64;
     let mut model = chart::Model::new();
+    let mem_axis = chart::Axis::new(rows[chart::MEM].plot().2);
     // Mac monotonic ms minus device ms, from the newest reply, and the device time of that reply.
     // Both None until the first reply. chart::mac_now turns them into the Mac time of a frame.
     let mut mac_offset_ms: Option<i64> = None;
@@ -171,19 +172,23 @@ fn main() -> ! {
         // no Mac time (no reply yet, or none for STALE_MS) the plots are blank, and every row is
         // stale. A stale row shows "--" in its number slot.
         let numbers = [
-            model.rows[chart::CPU].newest().map(text::Number::percent),
-            model.rows[chart::GPU].newest().map(text::Number::percent),
+            model.cpu.newest().map(text::Number::percent),
+            model.gpu.newest().map(text::Number::percent),
             model.mem_gb.map(text::Number::gb),
         ];
         let now = chart::mac_now(mac_offset_ms, last_reply_us, t0);
         let mut stale = [true; layout::ROWS];
-        for (i, ((series, row), stale)) in
-            model.rows.iter().zip(rows.iter()).zip(stale.iter_mut()).enumerate()
-        {
+        for (i, (row, stale)) in rows.iter().zip(stale.iter_mut()).enumerate() {
             match now {
                 Some(now) => {
-                    chart::draw(series, row, now, |op| panel.apply(op));
-                    *stale = series.is_stale(now);
+                    match i {
+                        chart::CPU => chart::draw(&model.cpu, row, now, |op| panel.apply(op)),
+                        chart::GPU => chart::draw(&model.gpu, row, now, |op| panel.apply(op)),
+                        _ => chart::draw_compressed(&model.mem, row, &mem_axis, now, |op| {
+                            panel.apply(op)
+                        }),
+                    }
+                    *stale = model.is_stale(i, now);
                 }
                 None => chart::blank(row, |op| panel.apply(op)),
             }
@@ -263,9 +268,9 @@ fn main() -> ! {
                 misses,
                 unsent,
                 unread,
-                model.rows[chart::CPU].newest(),
-                model.rows[chart::GPU].newest(),
-                model.rows[chart::MEM].newest(),
+                model.cpu.newest(),
+                model.gpu.newest(),
+                model.mem.newest(),
                 stale
             );
             window_start = t2;

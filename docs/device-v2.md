@@ -326,8 +326,12 @@ Next:
    number in the v1 formats ("7%", "97.4G"), and "--" for a stale row. Its glyphs are baked at
    build time from `fonts/tach-36.bdf` and `fonts/tach-16.bdf`, which `fonts/make-fonts.py`
    renders from Monaspace Neon SemiBold (OFL, `fonts/OFL.txt`). The slot costs about 1.4 ms of
-   draw per frame. Not yet: the 5-minute memory axis (memory uses the same 25 s window as CPU
-   and GPU for now).
+   draw per frame. The memory row has its 5-minute compressed axis (`chart::Axis`,
+   `chart::draw_compressed`): the right edge travels at 12 px/s like CPU and GPU, the left edge
+   is 300 s old, and each column is a min/max stroke over its time span, so a short peak stays
+   visible. Memory keeps 3615 buckets of 83 ms (about 87 KB). Marks at 1, 2, 3 and 4 minutes stay
+   in place. With a full 5-minute history, draw takes about 8.2 ms per frame (3.8 ms before),
+   and the panel stays at 29–30 fps. Not yet: the zoomed memory y axis of v1 (design.md 5.2).
 7. Started: `tach-sender.py` answers each `{"pull":N}` with the Q36 keys and the same `pull` value,
    `ok: false` when macmon is stale. CPU from per-core Mach ticks, memory low/high since the last
    reply, GPU from macmon at 10 Hz while the v2 device is connected. A thread serves the v2 device

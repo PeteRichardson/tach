@@ -5,6 +5,9 @@ edition = "2021"
 publish = false
 description = "Runs the firmware's pure modules (wire, chart, framebuf, layout, text) under cargo test on the Mac"
 
+[dependencies]
+libm = "0.2"
+
 [lib]
 path = "lib.rs"
 
