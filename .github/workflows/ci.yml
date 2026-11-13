@@ -7,6 +7,11 @@
 # test skips itself off macOS, but the rest of the suite only proves what it
 # claims when it runs on the platform the product runs on. Ruff is
 # platform-independent and bills 10x on macOS, so it gets its own Linux job.
+#
+# The firmware tests run on Linux too: device/host-tests compiles the pure
+# firmware modules (wire, chart, framebuf, layout, ops) for the host, so they
+# need neither the RP2350 target nor a Mac. Run from the repository root, so
+# device/.cargo/config.toml does not force the thumb target.
 name: CI
 
 on:
@@ -40,3 +45,11 @@ jobs:
 
       - name: Pytest
         run: uv run pytest
+
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cargo test
+        run: cargo test --manifest-path device/host-tests/Cargo.toml

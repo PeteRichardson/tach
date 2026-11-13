@@ -213,8 +213,8 @@ class CpuTicks:
         now = self.ticks()
         if self.prev is not None and len(self.prev) == len(now):
             # Counters are 32-bit and wrap, so take each core's delta on its own.
-            d_busy = sum((b - pb) & 0xFFFFFFFF for (b, _), (pb, _) in zip(now, self.prev))
-            d_idle = sum((i - pi) & 0xFFFFFFFF for (_, i), (_, pi) in zip(now, self.prev))
+            d_busy = sum((b - pb) & 0xFFFFFFFF for (b, _), (pb, _) in zip(now, self.prev, strict=True))
+            d_idle = sum((i - pi) & 0xFFFFFFFF for (_, i), (_, pi) in zip(now, self.prev, strict=True))
             if d_busy + d_idle:
                 self.percent = 100.0 * d_busy / (d_busy + d_idle)
         self.prev = now
