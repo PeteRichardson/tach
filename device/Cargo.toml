@@ -1,0 +1,34 @@
+[package]
+name = "tach-device"
+version = "0.1.0"
+edition = "2021"
+description = "Tach device firmware: RP2350 driving a display panel over SPI, pull-based protocol"
+license = "MIT"
+
+[dependencies]
+rp235x-hal = { version = "0.4.0", features = ["rt", "critical-section-impl"] }
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.7"
+panic-halt = "1.0.0"
+embedded-hal = "1.0.0"
+# Same version rp235x-hal 0.4 exports, so the clock types line up.
+fugit = "0.3.6"
+
+# Frame timing telemetry over SWD. Drop the feature and the prints compile away.
+rtt-target = { version = "0.5.0", optional = true }
+
+[features]
+default = ["rtt"]
+rtt = ["dep:rtt-target"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = 2          # probe-rs wants symbols
+strip = false
+panic = "abort"
+
+[profile.dev]
+opt-level = "s"
+debug = 2

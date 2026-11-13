@@ -2,3 +2,4 @@
 .venv/
 __pycache__/
 docs/reviews/PROJECT_REVIEW.md
+device/target/
