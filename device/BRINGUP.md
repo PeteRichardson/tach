@@ -179,3 +179,63 @@ Current RTT: `fps 29  draw_us 1992  present_us 9079  KB/s 111`.
    for now. Check `opt-level` and bounds checks if it becomes important.
 3. Tidy the dead-code warnings (`Madrs` variants, `Brightness`, `vcom_toggle`, `CMD_CLEAR_MEMORY`)
    when the protocol work uses or removes them.
+
+## 2026-11-12: present cost measured — 1.3x wire time, not 3x
+
+The "3x" above was wrong. It divided the *worst* present time by the *average* bytes per frame. The
+worst frame is the frame that shifts the plots. That frame sends all 180 plot rows: 9362 B.
+
+Two facts from the rp235x-hal 0.4 source:
+
+- **The SPI clock is 10.71 MHz, not 12 MHz.** `set_baudrate` gives
+  `clk_peri / (prescale * (1 + postdiv))` at or below the request: 150 MHz / (2 * 7).
+- **`SpiBus::write` sends one byte at a time.** For each byte it writes TX, then waits for that
+  byte to come back in RX. The 8-entry FIFO is never full, so there is a gap after each byte.
+
+Benchmark at boot, 5200 B (100 rows of 52), CS low so that the panel ignores the data:
+
+| Path | Time | Compared to wire time |
+| --- | --- | --- |
+| Wire time at 10.71 MHz | 3882 us | 1.00x |
+| One `spi.write` of 5200 B | 4856 us | 1.25x |
+| 100 `spi.write` of 52 B (what `flush` does) | 4863 us | 1.25x |
+| Raw loop that keeps the TX FIFO full (Pico SDK `spi_write_blocking`) | 3887 us | 1.00x |
+
+Frame loop: worst present 9079 us for 9362 B. Wire time 6990 us, so 1.30x.
+
+Where the 9079 us goes:
+
+- 6990 us: wire time at 10.71 MHz.
+- About 1750 us: the byte-at-a-time gap (25%). The cost per call is too small to see.
+- About 340 us: the rest of `flush`. That is the CS edges, the dirty-flag scan and the copy of
+  each row into its record.
+
+Options, not done yet:
+
+1. A FIFO-full write gives a present of about 7.3 ms. It needs raw register access, for example
+   a small wrapper around the HAL `Spi` that implements `SpiBus::write` the way the SDK does.
+2. The clock: at 150 MHz, the HAL can give 10.71 MHz (at most 12 MHz) or 12.5 MHz (`SPI_HZ` set
+   to 12.5 MHz). The LS027B7DH01 datasheet limit is much lower, so this needs a test on the glass.
+3. The volume: each shift sends the full plot area again, because the SHARP panel has no scroll.
+   This is the largest cost, but the RA8875 does not have it (hardware scroll). Thus it is
+   possibly not worth optimizing on the scaffold.
+
+The `present_us` log now also shows the bytes of the worst frame.
+
+## 2026-11-12: FIFO-full SPI write — present at wire speed
+
+Option 1 is done. `src/fifo_spi.rs` takes the configured HAL `Spi` with `free()` and implements
+`SpiBus<u8>`. `write` keeps the TX FIFO full and returns when the last byte is in the FIFO.
+`flush` waits for BSY to clear, drains RX and clears the overrun flag.
+
+The driver did not call `spi.flush()` before it set CS low. That worked only because the HAL write
+waited for each byte. All four CS releases in `sharp.rs` now call `flush()` first, as the
+embedded-hal contract requires.
+
+Result: worst present 7000 us for 9362 B, wire time 6990 us, so 1.00x (was 9079 us, 1.30x). The
+rest of `flush` (about 340 us) is also gone, because the CPU prepares the next row while the FIFO
+sends the current row. The user confirmed the image on the glass is correct. The boot log now
+shows the real clock: `400x240 @ 10714285 Hz SPI (12000000 Hz requested)`. The benchmark is
+removed.
+
+Still open from the options above: 12.5 MHz (test on the glass), and the shift volume.

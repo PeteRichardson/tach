@@ -22,11 +22,13 @@ use rp235x_hal::{
     watchdog::Watchdog,
 };
 
+mod fifo_spi;
 mod framebuf;
 mod layout;
 mod ops;
 mod sharp;
 
+use fifo_spi::FifoSpi;
 use ops::{Op, Panel};
 
 #[cfg(feature = "rtt")]
@@ -92,7 +94,7 @@ fn main() -> ! {
     // two-wire set is (Tx, Sck); see rp235x_hal::spi::pins.
     let sck = pins.gpio18.into_function::<FunctionSpi>();
     let mosi = pins.gpio19.into_function::<FunctionSpi>();
-    let spi = Spi::<_, _, _, 8>::new(pac.SPI0, (mosi, sck)).init(
+    let mut spi = Spi::<_, _, _, 8>::new(pac.SPI0, (mosi, sck)).init(
         &mut resets,
         clocks.peripheral_clock.freq(),
         SPI_HZ.Hz(),
@@ -103,15 +105,21 @@ fn main() -> ! {
     let cs = pins.gpio17.into_push_pull_output();
     let disp = pins.gpio16.into_push_pull_output();
 
-    let mut panel = Sharp::new(spi, cs, disp);
     let timer = hal::timer::Timer::new_timer0(pac.TIMER0, &mut resets, &clocks);
+
+    // The divider cannot make every rate, so log the one the bus really runs at: 10.71 MHz for a
+    // 12 MHz request. Setting it again writes the same divider.
+    let spi_hz = spi.set_baudrate(clocks.peripheral_clock.freq(), SPI_HZ.Hz()).to_Hz();
+
+    // The HAL's own write waits after every byte; this bus keeps the FIFO full. See fifo_spi.rs.
+    let mut panel = Sharp::new(FifoSpi::new(spi), cs, disp);
 
     panel.enable();
     // The driver needs a moment after DISP goes high before it accepts pixels.
     wait_us(&timer, 20_000);
 
     let (w, h) = panel.size();
-    rprintln!("tach scaffold up: {}x{} @ {} Hz SPI", w, h, SPI_HZ);
+    rprintln!("tach scaffold up: {}x{} @ {} Hz SPI ({} Hz requested)", w, h, spi_hz, SPI_HZ);
 
     selftest(&mut panel, &timer);
 
@@ -135,6 +143,7 @@ fn main() -> ! {
     let mut frames: u32 = 0;
     let mut draw_us_max: u64 = 0;
     let mut present_us_max: u64 = 0;
+    let mut present_bytes_at_max: usize = 0;
     let mut bytes_total: usize = 0;
     let mut window_start: u64 = timer.get_counter().ticks();
 
@@ -219,7 +228,10 @@ fn main() -> ! {
         let t2 = timer.get_counter().ticks();
 
         draw_us_max = draw_us_max.max(t1 - t0);
-        present_us_max = present_us_max.max(t2 - t1);
+        if t2 - t1 > present_us_max {
+            present_us_max = t2 - t1;
+            present_bytes_at_max = panel.last_flush_bytes;
+        }
         bytes_total += panel.last_flush_bytes;
         frames += 1;
 
@@ -228,10 +240,11 @@ fn main() -> ! {
         let span = t2 - window_start;
         if span >= TICKS_PER_S {
             rprintln!(
-                "fps {}  draw_us {}  present_us {}  rows {}  KB/s {}",
+                "fps {}  draw_us {}  present_us {} ({} B)  rows {}  KB/s {}",
                 frames as u64 * TICKS_PER_S / span,
                 draw_us_max,
                 present_us_max,
+                present_bytes_at_max,
                 panel.last_flush_rows,
                 bytes_total as u64 * TICKS_PER_S / span / 1024
             );
@@ -239,6 +252,7 @@ fn main() -> ! {
             frames = 0;
             draw_us_max = 0;
             present_us_max = 0;
+            present_bytes_at_max = 0;
             bytes_total = 0;
         }
 

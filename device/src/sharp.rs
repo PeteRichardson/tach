@@ -92,6 +92,7 @@ where
     fn command(&mut self, byte: u8) {
         let _ = self.cs.set_high();
         let _ = self.spi.write(&[byte]);
+        let _ = self.spi.flush();
         let _ = self.cs.set_low();
     }
 
@@ -101,6 +102,7 @@ where
         self.command(CMD_CLEAR_MEMORY | if self.vcom_high { CMD_VCOM } else { 0 });
         let _ = self.cs.set_high();
         let _ = self.spi.write(&[DUMMY]);
+        let _ = self.spi.flush();
         let _ = self.cs.set_low();
     }
 
@@ -110,6 +112,7 @@ where
         self.command(if self.vcom_high { CMD_VCOM } else { 0 });
         let _ = self.cs.set_high();
         let _ = self.spi.write(&[DUMMY]);
+        let _ = self.spi.flush();
         let _ = self.cs.set_low();
     }
 
@@ -145,6 +148,7 @@ where
         // 16-bit frame trailer.
         let _ = self.spi.write(&[DUMMY]);
         bytes += 1;
+        let _ = self.spi.flush();
         let _ = self.cs.set_low();
 
         self.vcom_high = !self.vcom_high;

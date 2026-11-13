@@ -298,11 +298,12 @@ Done, 2026-11-12. Details and evidence: [`../device/BRINGUP.md`](../device/BRING
 3. SHARP panel bring-up: the five-pattern self-test shows the 400×240 geometry, the bit order and
    CS polarity are correct on the glass.
 4. Operations on the SHARP frame buffer, with chart motion from fake 8 Hz samples: 29–30 fps,
-   worst draw 2.0 ms, worst present 9.1 ms at 12 MHz SPI.
+   worst draw 2.0 ms, worst present 7.0 ms for 9362 B at 10.71 MHz SPI (12 MHz requested).
 
 Next:
 
-5. Measure why a present costs about 3× its wire time at 12 MHz, before the SPI clock goes up.
+5. Done: present now runs at wire speed (7.0 ms for 9362 B at 10.71 MHz). The HAL's
+   `SpiBus::write` waited after each byte; `device/src/fifo_spi.rs` keeps the FIFO full.
 6. USB CDC on the device, and measure the round trip of one pull per frame.
 7. Change `tach-sender.py`: native CPU ticks, answer one pull per frame with the Q36 keys,
    `ok: false` when macmon is dead.
