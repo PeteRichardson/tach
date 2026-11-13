@@ -31,6 +31,7 @@ mod layout;
 mod link;
 mod ops;
 mod sharp;
+mod text;
 mod wire;
 
 use fifo_spi::FifoSpi;
@@ -46,6 +47,8 @@ const XOSC_HZ: u32 = 12_000_000;
 /// step up is 12.5 MHz. Measured on the glass: 10.71 MHz works, 12.5 MHz leaves the panel blank.
 /// See device/BRINGUP.md.
 const SPI_HZ: u32 = 12_000_000;
+/// Row labels, in the order of chart::CPU, GPU, MEM.
+const LABELS: [&[u8]; layout::ROWS] = [b"CPU", b"GPU", b"MEM"];
 /// Target frames per second.
 const FPS: u32 = 30;
 
@@ -166,10 +169,17 @@ fn main() -> ! {
         // Every curve moves on every frame, whether or not a sample came in: travel follows the
         // clock (ADR-0002). The reply read at the end of this frame shows on the next one. With
         // no Mac time (no reply yet, or none for STALE_MS) the plots are blank, and every row is
-        // stale.
+        // stale. A stale row shows "--" in its number slot.
+        let numbers = [
+            model.rows[chart::CPU].newest().map(text::Number::percent),
+            model.rows[chart::GPU].newest().map(text::Number::percent),
+            model.mem_gb.map(text::Number::gb),
+        ];
         let now = chart::mac_now(mac_offset_ms, last_reply_us, t0);
         let mut stale = [true; layout::ROWS];
-        for ((series, row), stale) in model.rows.iter().zip(rows.iter()).zip(stale.iter_mut()) {
+        for (i, ((series, row), stale)) in
+            model.rows.iter().zip(rows.iter()).zip(stale.iter_mut()).enumerate()
+        {
             match now {
                 Some(now) => {
                     chart::draw(series, row, now, |op| panel.apply(op));
@@ -177,7 +187,11 @@ fn main() -> ! {
                 }
                 None => chart::blank(row, |op| panel.apply(op)),
             }
-            mark_slot(&mut panel, row, !*stale);
+            let number = match &numbers[i] {
+                Some(n) if !*stale => n,
+                _ => &text::Number::dashes(),
+            };
+            text::draw_slot(row, LABELS[i], number, |op| panel.apply(op));
         }
 
         let t1 = timer.get_counter().ticks();
@@ -359,7 +373,7 @@ fn selftest<P: Panel>(panel: &mut P, timer: &hal::timer::Timer<hal::timer::Copya
 }
 
 /// Static chrome: the panel border and each chart frame. The number slot is drawn per frame by
-/// `mark_slot`.
+/// `text::draw_slot`.
 fn draw_chrome<P: Panel>(panel: &mut P, rows: &[layout::Row; layout::ROWS]) {
     let (w, h) = panel.size();
     panel.apply(Op::Clear { on: false });
@@ -375,18 +389,4 @@ fn draw_chrome<P: Panel>(panel: &mut P, rows: &[layout::Row; layout::ROWS]) {
             on: true,
         });
     }
-}
-
-/// The number slot until the glyph atlas exists: a rule through the slot, drawn at the line level
-/// while the row is live and at the dim level when it is stale. Dim is the background on the SHARP
-/// panel (docs/device-v2.md, Four drawing levels), so a stale row's rule disappears. The digits
-/// take the same flag when they come.
-fn mark_slot<P: Panel>(panel: &mut P, r: &layout::Row, live: bool) {
-    panel.apply(Op::Line {
-        x0: r.slot_x as i32,
-        y0: (r.chart_y + r.chart_h / 2) as i32,
-        x1: (r.chart_x - 2) as i32,
-        y1: (r.chart_y + r.chart_h / 2) as i32,
-        on: live,
-    });
 }

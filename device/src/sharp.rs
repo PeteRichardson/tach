@@ -182,6 +182,7 @@ where
             Op::ShiftBand { left, top, width, height, by } => {
                 self.fb.shift_band_left(left, top, width, height, by)
             }
+            Op::Glyph { x, y, glyph, on } => self.fb.glyph(x, y, glyph, on),
             // No backlight on this panel. Kept in the trait so the caller does not need to know.
             Op::Brightness { .. } => {}
         }

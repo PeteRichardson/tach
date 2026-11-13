@@ -6,6 +6,7 @@
 //! See docs/device-v2.md, Mac-side sources and device/WIRING.md.
 
 use crate::ops::Madrs;
+use crate::text::Glyph;
 
 /// Bytes in one panel row at 400 px wide.
 pub const ROW_BYTES: usize = 50;
@@ -93,6 +94,17 @@ impl Framebuf {
                 row[i] = (row[i] & !mask[i]) | (fill & mask[i]);
             }
             self.dirty[yy] = true;
+        }
+    }
+
+    /// Draw the lit pixels of a glyph with its ink box at (x, y). Unlit pixels are left alone.
+    pub fn glyph(&mut self, x: i32, y: i32, g: &Glyph, on: bool) {
+        for gy in 0..g.h {
+            for gx in 0..g.w {
+                if g.lit(gx, gy) {
+                    self.set(x + gx as i32, y + gy as i32, on);
+                }
+            }
         }
     }
 

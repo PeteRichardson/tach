@@ -3,6 +3,8 @@
 //! The firmware never builds a whole frame and ships it. It issues operations; each backend does
 //! what its controller does best. See ADR-0004.
 
+use crate::text::Glyph;
+
 /// Which corner of the panel maps to (0,0). The RA8875 has a MADR-style register; the shim only
 /// needs it so that a rotated target panel can be previewed on the scaffold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +49,10 @@ pub enum Op {
         height: u16,
         by: usize,
     },
+    /// One character from the glyph atlas, its ink box at (x, y). Only lit pixels are drawn, at
+    /// level `on`; the rest of the box is left as it is. An atlas blit on the RA8875; a bit loop on
+    /// the shim.
+    Glyph { x: i32, y: i32, glyph: &'static Glyph, on: bool },
     /// Backlight, 0 to 100. The scaffold has no backlight, so it ignores this.
     Brightness { percent: u8 },
 }

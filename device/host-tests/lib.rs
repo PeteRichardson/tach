@@ -18,5 +18,7 @@ mod framebuf;
 mod layout;
 #[path = "../src/ops.rs"]
 mod ops;
+#[path = "../src/text.rs"]
+mod text;
 #[path = "../src/wire.rs"]
 mod wire;

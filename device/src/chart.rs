@@ -114,11 +114,13 @@ impl Series {
 /// The three rows, in panel order.
 pub struct Model {
     pub rows: [Series; 3],
+    /// Newest memory used in GB, for the number slot: the chart shows a percent, the number GB.
+    pub mem_gb: Option<f32>,
 }
 
 impl Model {
     pub const fn new() -> Self {
-        Self { rows: [Series::new(), Series::new(), Series::new()] }
+        Self { rows: [Series::new(), Series::new(), Series::new()], mem_gb: None }
     }
 
     /// Take the values of one reply. A value without its stamp is not used: the stamp places it.
@@ -135,6 +137,7 @@ impl Model {
                 let pct = |g: f32| 100.0 * g / total;
                 let (lo, hi) = (r.mem_lo.unwrap_or(gb), r.mem_hi.unwrap_or(gb));
                 self.rows[MEM].add(t, pct(gb), pct(lo), pct(hi));
+                self.mem_gb = Some(gb);
             }
         }
     }

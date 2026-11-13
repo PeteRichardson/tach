@@ -45,6 +45,27 @@ impl Row {
         (self.chart_x + 1, self.chart_y + 1, self.chart_w() - 2, self.chart_h - 2)
     }
 
+    /// The number slot: from the slot's left edge to the margin before the chart frame, and as high
+    /// as the chart, as (left, top, width, height).
+    pub fn slot(&self) -> (u16, u16, u16, u16) {
+        (self.slot_x, self.chart_y, self.chart_x - MARGIN_PX - self.slot_x, self.chart_h)
+    }
+
+    /// Baseline of the row label: its capitals (12 px at 16 px) sit level with the chart's top.
+    pub fn label_baseline(&self) -> u16 {
+        self.chart_y + 12
+    }
+
+    /// Baseline of the number: on the chart's bottom frame line.
+    pub fn number_baseline(&self) -> u16 {
+        self.chart_y + self.chart_h - 1
+    }
+
+    /// Right end of the number's pen travel: the right edge of the slot.
+    pub fn number_right(&self) -> u16 {
+        self.chart_x - MARGIN_PX
+    }
+
     /// Plot row for a value from 0 to 100: 0 on the bottom row of the plot area, 100 on the top.
     pub fn plot_y(&self, v: f32) -> u16 {
         let (_, top, _, h) = self.plot();

@@ -79,8 +79,9 @@ The image is composed of four semantic levels, mapped per panel because a mono p
   12 MHz. See [ADR-0004](adr/0004-the-firmware-sends-drawing-operations-not-frames.md).
 - Horizontal travel redraws each moving curve once per frame from the stored samples, at an exact
   fractional x offset. Hardware scroll is **not** the travel path — see Motion budget below.
-- Glyphs come from an atlas baked from `fonts/tach-36.bdf` at build time, blitted as small
-  rectangles. No font files on the device at runtime.
+- Glyphs come from an atlas baked from `fonts/tach-36.bdf` (digits) and `fonts/tach-16.bdf`
+  (row labels) at build time, blitted as small rectangles. No font files on the device at
+  runtime. The BDF files are rendered from Monaspace Neon SemiBold by `fonts/make-fonts.py`.
 - The SHARP scaffold has no VRAM and no scroll: the shim translates each operation into writes on
   a 12 KB frame buffer in MCU RAM and one flush per frame.
 - Brightness is PWM on the RA8875 backlight pin.
@@ -321,9 +322,12 @@ Next:
    redrawn from the model on every frame. The staleness rule (`chart::STALE_MS`, 5 s) is in: a row
    whose newest Mac stamp is older than 5 s is stale, so a dead macmon stops the GPU row while CPU
    and memory go on (issue #1). No reply for 5 s blanks every plot instead of moving old curves
-   (ADR-0005, ADR-0006). Until the digits exist, a stale row loses the rule in its number slot.
-   Not yet: the 5-minute memory axis (memory uses the same 25 s window as CPU and GPU for now),
-   and digits in the number slot.
+   (ADR-0005, ADR-0006). The number slot (`device/src/text.rs`) shows the row label and the
+   number in the v1 formats ("7%", "97.4G"), and "--" for a stale row. Its glyphs are baked at
+   build time from `fonts/tach-36.bdf` and `fonts/tach-16.bdf`, which `fonts/make-fonts.py`
+   renders from Monaspace Neon SemiBold (OFL, `fonts/OFL.txt`). The slot costs about 1.4 ms of
+   draw per frame. Not yet: the 5-minute memory axis (memory uses the same 25 s window as CPU
+   and GPU for now).
 7. Started: `tach-sender.py` answers each `{"pull":N}` with the Q36 keys and the same `pull` value,
    `ok: false` when macmon is stale. CPU from per-core Mach ticks, memory low/high since the last
    reply, GPU from macmon at 10 Hz while the v2 device is connected. A thread serves the v2 device
