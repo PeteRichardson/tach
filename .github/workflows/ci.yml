@@ -12,6 +12,9 @@
 # firmware modules (wire, chart, framebuf, layout, ops) for the host, so they
 # need neither the RP2350 target nor a Mac. Run from the repository root, so
 # device/.cargo/config.toml does not force the thumb target.
+#
+# setup-uv publishes no major tags from v8 on, and its maintainers ask for a
+# pin to a commit; the comment gives the release. Both actions run on Node 24.
 name: CI
 
 on:
@@ -23,9 +26,9 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Install dependencies
         run: uv sync
@@ -36,9 +39,9 @@ jobs:
   test:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Install dependencies
         run: uv sync
@@ -49,7 +52,7 @@ jobs:
   firmware:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cargo test
         run: cargo test --manifest-path device/host-tests/Cargo.toml
