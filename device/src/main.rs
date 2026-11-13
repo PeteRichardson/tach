@@ -1,6 +1,6 @@
-//! Tach device firmware, milestone 1: bring up the SHARP scaffold, prove the geometry, and measure
-//! the frame cost and the pull round trip. The pull is a probe for now: the demo curves are still
-//! fake, and the reply is only timed, not read.
+//! Tach device firmware, milestone 1: bring up the SHARP scaffold, prove the geometry, and chart
+//! the Mac. Each frame redraws the curves from the chart model at Mac time, then pulls one reply
+//! from tach-sender.py and reads it into the model (ADR-0002, ADR-0006).
 //!
 //! Wiring: device/WIRING.md. Pins: SPI0 SCK GP18, MOSI GP19, CS GP17 (GPIO, active high),
 //! DISP GP16 (GPIO). GP20/GP21 stay free for SWD.
@@ -24,12 +24,14 @@ use rp235x_hal::{
     watchdog::Watchdog,
 };
 
+mod chart;
 mod fifo_spi;
 mod framebuf;
 mod layout;
 mod link;
 mod ops;
 mod sharp;
+mod wire;
 
 use fifo_spi::FifoSpi;
 use ops::{Op, Panel};
@@ -44,11 +46,8 @@ const XOSC_HZ: u32 = 12_000_000;
 /// step up is 12.5 MHz. Measured on the glass: 10.71 MHz works, 12.5 MHz leaves the panel blank.
 /// See device/BRINGUP.md.
 const SPI_HZ: u32 = 12_000_000;
-/// Target frames per second for the motion demo.
+/// Target frames per second.
 const FPS: u32 = 30;
-/// Fake sample rate for the motion demo, the same 8 Hz the Mac side sends.
-const SAMPLE_HZ: u64 = 8;
-
 
 /// The RP2350 timer runs at 1 MHz, so ticks are microseconds.
 const TICKS_PER_S: u64 = 1_000_000;
@@ -134,18 +133,14 @@ fn main() -> ! {
     draw_chrome(&mut panel, &rows);
     panel.present();
 
-    // --- motion demo ---------------------------------------------------------
+    // --- frame loop ----------------------------------------------------------
     // Static chrome once, then per-frame work only. This is the shape the firmware keeps on the
     // RA8875, so the numbers measured here carry over to the target panel.
     let frame_us = TICKS_PER_S / FPS as u64;
-    let mut sim: u64 = 0; // fake sample counter at 8 Hz
-    let sample_us = TICKS_PER_S / SAMPLE_HZ;
-    let mut next_sample: u64 = timer.get_counter().ticks();
-    // Pixels the plot has moved since the last sample, so the new sample joins the previous one
-    // where it now is: 1 or 2 px back at 12 px/s and 8 Hz.
-    let mut px_since_sample: usize = 0;
-    let mut phase_x100: u64 = 0; // travel accumulator in hundredths of a pixel
-    let travel_x100_per_frame: u64 = (layout::TRAVEL_PX_PER_S * 100.0) as u64 / FPS as u64;
+    let mut model = chart::Model::new();
+    // Mac monotonic ms minus device ms, from the newest reply. None until the first reply, and
+    // until then there is no Mac time to draw at.
+    let mut mac_offset_ms: Option<i64> = None;
 
     let mut frames: u32 = 0;
     let mut draw_us_max: u64 = 0;
@@ -154,8 +149,7 @@ fn main() -> ! {
     let mut bytes_total: usize = 0;
     let mut window_start: u64 = timer.get_counter().ticks();
 
-    // Pull round trip (ADR-0006, open frontier item 2). One pull after each present, then wait
-    // for the reply in the idle part of the frame. The demo does not use the reply yet.
+    // One pull after each present, then wait for the reply in the idle part of the frame.
     let mut pull_seq: u32 = 0;
     let mut reply = [0u8; link::LINE_MAX];
     let mut rtt_us_max: u64 = 0;
@@ -163,81 +157,18 @@ fn main() -> ! {
     let mut replies: u32 = 0;
     let mut misses: u32 = 0; // pull sent, no matching reply before the frame deadline
     let mut unsent: u32 = 0; // port not open, or no room in the USB buffer
+    let mut unread: u32 = 0; // matching reply, but not a version 2 object
 
     loop {
         let t0 = timer.get_counter().ticks();
 
-        // 8 Hz sample stream: CPU/GPU waves, memory a slow rising level. Paced by the timer, not
-        // by the travel accumulator, which wraps every pixel.
-        let sample_now = t0 >= next_sample;
-        if sample_now {
-            sim += 1;
-            next_sample += sample_us;
-        }
-
-        // Travel at 12 px/s: 0.4 px per frame at 30 fps. Accumulate and shift whole pixels when it
-        // crosses 1.0 — that uneven 1,0,1,1,0 pattern is exactly what the RA8875's whole-pixel
-        // scroll does natively, and why the curve is redrawn at an exact offset instead.
-        phase_x100 += travel_x100_per_frame;
-        let shift = (phase_x100 / 100) as usize;
-        phase_x100 %= 100;
-        px_since_sample += shift;
-        if shift > 0 {
-            for r in rows.iter() {
-                let (left, top, width, height) = r.plot();
-                panel.apply(Op::ShiftBand { left, top, width, height, by: shift });
+        // Every curve moves on every frame, whether or not a sample came in: travel follows the
+        // clock (ADR-0002). The reply read at the end of this frame shows on the next one.
+        if let Some(offset) = mac_offset_ms {
+            let now = ((t0 / 1000) as i64 + offset) as u64;
+            for (series, row) in model.rows.iter().zip(rows.iter()) {
+                chart::draw(series, row, now, |op| panel.apply(op));
             }
-        }
-
-        for (i, r) in rows.iter().enumerate() {
-            if !sample_now {
-                continue;
-            }
-            let v = match i {
-                0 => 30.0 + 25.0 * sine((sim % 200) as f32 / 3.0),
-                1 => 15.0 + 10.0 * sine((sim % 137) as f32 / 5.0),
-                _ => 40.0 + (sim % 90) as f32 / 3.0,
-            }
-            .clamp(0.0, 100.0);
-            let (plot_x, plot_top, plot_w, _) = r.plot();
-            // Newest column of the plot area, just inside the right edge of the frame.
-            let now_x = (plot_x + plot_w - 1) as i32;
-            let y = r.plot_y(v);
-            // Newest sample lands at the right edge; history moves left with time.
-            panel.apply(Op::Pix {
-                x: now_x,
-                y: y as i32,
-                on: true,
-            });
-            // Connect to the previous sample so the curve reads as a line, not dots.
-            let prev_v = match i {
-                0 => 30.0 + 25.0 * sine((sim.saturating_sub(1) % 200) as f32 / 3.0),
-                1 => 15.0 + 10.0 * sine((sim.saturating_sub(1) % 137) as f32 / 5.0),
-                _ => 40.0 + (sim.saturating_sub(1) % 90) as f32 / 3.0,
-            }
-            .clamp(0.0, 100.0);
-            let py = r.plot_y(prev_v);
-            panel.apply(Op::Line {
-                x0: now_x - px_since_sample.max(1) as i32,
-                y0: py as i32,
-                x1: now_x,
-                y1: y as i32,
-                on: true,
-            });
-            // Time-axis ruler tick every 5 s of travel.
-            if sim % (8 * layout::GRID_TICK_S as u64) == 0 {
-                panel.apply(Op::Line {
-                    x0: now_x,
-                    y0: plot_top as i32,
-                    x1: now_x,
-                    y1: (plot_top + 4) as i32,
-                    on: true,
-                });
-            }
-        }
-
-        if sample_now {
-            px_since_sample = 0;
         }
 
         let t1 = timer.get_counter().ticks();
@@ -259,6 +190,17 @@ fn main() -> ! {
                         rtt_us_max = rtt_us_max.max(now - t2);
                         rtt_us_sum += now - t2;
                         replies += 1;
+                        match wire::parse(&reply[..n]).filter(|r| r.v == Some(wire::VERSION)) {
+                            Some(r) => {
+                                // `t` was stamped on the Mac about half a millisecond ago. At
+                                // 12 px/s that is well under a pixel, so it is not corrected.
+                                if let Some(t) = r.t {
+                                    mac_offset_ms = Some(t as i64 - (now / 1000) as i64);
+                                }
+                                model.take(&r);
+                            }
+                            None => unread += 1,
+                        }
                         break;
                     }
                 }
@@ -284,7 +226,7 @@ fn main() -> ! {
         let span = t2 - window_start;
         if span >= TICKS_PER_S {
             rprintln!(
-                "fps {}  draw_us {}  present_us {} ({} B)  rows {}  KB/s {}  rtt_us avg {} max {}  ok {} miss {} unsent {}",
+                "fps {}  draw_us {}  present_us {} ({} B)  rows {}  KB/s {}  rtt_us avg {} max {}  ok {} miss {} unsent {} unread {}  cpu {:?} gpu {:?} mem% {:?}",
                 frames as u64 * TICKS_PER_S / span,
                 draw_us_max,
                 present_us_max,
@@ -295,7 +237,11 @@ fn main() -> ! {
                 rtt_us_max,
                 replies,
                 misses,
-                unsent
+                unsent,
+                unread,
+                model.rows[chart::CPU].newest(),
+                model.rows[chart::GPU].newest(),
+                model.rows[chart::MEM].newest()
             );
             window_start = t2;
             frames = 0;
@@ -308,6 +254,7 @@ fn main() -> ! {
             replies = 0;
             misses = 0;
             unsent = 0;
+            unread = 0;
         }
 
         // Pace to the deadline of this frame, so a slow frame cannot cause a burst of catch-up
@@ -352,26 +299,6 @@ impl core::fmt::Write for LineBuf {
 fn answers(line: &[u8], tag: &[u8]) -> bool {
     line.windows(tag.len() + 1)
         .any(|w| &w[..tag.len()] == tag && matches!(w[tag.len()], b',' | b'}'))
-}
-
-/// Integer-range sine (Bhaskara I), good enough for a fake curve on a scaffold.
-fn sine(x: f32) -> f32 {
-    const TWO_PI: f32 = 6.283_185_3;
-    let mut a = x - (x / TWO_PI) as i32 as f32 * TWO_PI;
-    if a < 0.0 {
-        a += TWO_PI;
-    }
-    let pi = core::f32::consts::PI;
-    if a <= pi {
-        let n = 16.0 * a * (pi - a);
-        let d = 5.0 * pi * pi - 4.0 * a * (pi - a);
-        n / d
-    } else {
-        let b = a - pi;
-        let n = 16.0 * b * (pi - b);
-        let d = 5.0 * pi * pi - 4.0 * b * (pi - b);
-        -(n / d)
-    }
 }
 
 /// Five patterns that answer the geometry questions without needing a font. Each is held half a
@@ -420,7 +347,7 @@ fn selftest<P: Panel>(panel: &mut P, timer: &hal::timer::Timer<hal::timer::Copya
     wait_us(timer, 1_500_000);
 }
 
-/// Static chrome for the motion demo: the panel border, each chart frame, and a rule through the
+/// Static chrome: the panel border, each chart frame, and a rule through the
 /// number slot so the layout is visible before any glyph atlas exists.
 fn draw_chrome<P: Panel>(panel: &mut P, rows: &[layout::Row; layout::ROWS]) {
     let (w, h) = panel.size();

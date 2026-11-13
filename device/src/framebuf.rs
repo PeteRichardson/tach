@@ -73,11 +73,26 @@ impl Framebuf {
 
     /// Fill a rectangle. Coordinates are inclusive of the top-left and exclusive of the
     /// bottom-right, like every other graphics API.
+    ///
+    /// Whole bytes at a time, through a mask of the span: the chart clears each plot area on every
+    /// frame, and a per-pixel loop cost 8.4 ms per frame for that alone.
     pub fn fill_rect(&mut self, x: i32, y: i32, w: u16, h: u16, on: bool) {
-        for yy in y..y + h as i32 {
-            for xx in x..x + w as i32 {
-                self.set(xx, yy, on);
+        let x0 = x.clamp(0, WIDTH as i32) as usize;
+        let x1 = (x + w as i32).clamp(0, WIDTH as i32) as usize;
+        let y0 = y.clamp(0, HEIGHT as i32) as usize;
+        let y1 = (y + h as i32).clamp(0, HEIGHT as i32) as usize;
+        if x0 >= x1 {
+            return;
+        }
+        let mask = span_mask(x0, x1);
+        let fill = if on != self.background_on { 0xff } else { 0x00 };
+        let (b0, b1) = (x0 / 8, (x1 - 1) / 8 + 1);
+        for yy in y0..y1 {
+            let row = &mut self.rows[yy];
+            for i in b0..b1 {
+                row[i] = (row[i] & !mask[i]) | (fill & mask[i]);
             }
+            self.dirty[yy] = true;
         }
     }
 
@@ -232,4 +247,41 @@ fn span_mask(a: usize, b: usize) -> [u8; ROW_BYTES] {
         }
     }
     m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The byte-wise fill must light exactly the pixels the per-pixel loop did.
+    #[test]
+    fn fill_rect_matches_the_pixel_loop() {
+        for &(x, y, w, h, bg) in &[
+            (0, 0, 400, 240, false),
+            (3, 5, 1, 1, false),
+            (7, 2, 2, 3, true),
+            (119, 4, 276, 60, false),
+            (-5, -5, 20, 10, true),
+            (390, 230, 50, 50, false),
+            (8, 0, 8, 1, false),
+        ] {
+            for on in [true, false] {
+                let mut fast = Framebuf::new();
+                let mut slow = Framebuf::new();
+                for fb in [&mut fast, &mut slow] {
+                    fb.set_background_on(bg);
+                    fb.fill_raw(!on);
+                }
+                fast.fill_rect(x, y, w, h, on);
+                for yy in y..y + h as i32 {
+                    for xx in x..x + w as i32 {
+                        slow.set(xx, yy, on);
+                    }
+                }
+                for r in 0..HEIGHT {
+                    assert_eq!(fast.row(r), slow.row(r), "rect {:?} on {} row {}", (x, y, w, h, bg), on, r);
+                }
+            }
+        }
+    }
 }

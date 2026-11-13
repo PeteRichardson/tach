@@ -314,9 +314,12 @@ Next:
 
 5. Done: present now runs at wire speed (7.0 ms for 9362 B at 10.71 MHz). The HAL's
    `SpiBus::write` waited after each byte; `device/src/fifo_spi.rs` keeps the FIFO full.
-6. Started: USB CDC on the device (`device/src/link.rs`, stack in the USB interrupt). One pull
-   per frame round trips in 0.49 ms average, 0.87 ms worst, with a test responder on the Mac. Still
-   to do: read the reply into the chart model.
+6. Done: USB CDC on the device (`device/src/link.rs`, stack in the USB interrupt). One pull per
+   frame round trips in 0.49 ms average, 0.87 ms worst, with a test responder on the Mac. The reply
+   is read (`device/src/wire.rs`) into the chart model (`device/src/chart.rs`): one bucket per
+   pixel of travel, each with low, high and newest value, placed by its Mac stamp. Every curve is
+   redrawn from the model on every frame. Not yet: the 5-minute memory axis (memory uses the same
+   25 s window as CPU and GPU for now), digits in the number slot, and the staleness rule.
 7. Started: `tach-sender.py` answers each `{"pull":N}` with the Q36 keys and the same `pull` value,
    `ok: false` when macmon is stale. CPU from per-core Mach ticks, memory low/high since the last
    reply, GPU from macmon at 10 Hz while the v2 device is connected. A thread serves the v2 device

@@ -114,6 +114,7 @@ Set up the host tools once, then run them for every change:
 uv sync             # install pytest and ruff into .venv
 uv run pytest       # run the tests
 uv run ruff check   # run the lint
+cargo test --manifest-path device/host-tests/Cargo.toml   # run the firmware tests on the Mac
 ```
 
 GitHub Actions runs both commands on every push and pull request

@@ -282,3 +282,46 @@ Until the Mac opens the port (DTR low), the device does not send, and counts the
 
 Request format, settled after this measurement: `{"pull":N}`, and the reply carries the same
 `"pull":N` as a Q36 key, so a late reply cannot be taken for the answer to the next pull.
+
+## 2026-11-12: live Mac data on the glass — the reply drives the chart
+
+The fake demo curves are gone. Each frame now:
+
+1. Redraws each of the three curves from the chart model at the Mac time of the frame
+   (`chart::draw`). The plot area is cleared, then each bucket is drawn as a vertical stroke from
+   its low to its high, joined to the next bucket by its newest value.
+2. Presents.
+3. Pulls once, reads the reply with `wire::parse`, and adds its values to the model
+   (`Model::take`).
+
+Mac time on the device is the device timer plus an offset, which is set from `t` in each reply.
+The model keeps one bucket per pixel of travel (83 ms at 12 px/s), 400 per row. A bucket is placed
+by its Mac stamp, so motion follows the clock and not the arrival of samples. A repeated stamp is
+the same sample again and is dropped. A gap of more than 1.5 s breaks the curve.
+
+Rows: CPU, GPU, memory. Memory goes on the chart as a percent of `mem_total`.
+
+The first run showed `draw_us` at 8.4 ms with an empty chart. Nearly all of it was the per-pixel
+clear of the three plot areas, which is about 50,000 pixels. `Framebuf::fill_rect` now writes
+whole bytes through a span mask, and a host test checks it against the per-pixel loop.
+
+40 s at 30 fps with the launchd sender answering:
+
+| | Empty chart | Full history (25 s) |
+| --- | --- | --- |
+| draw | 1.7 ms | 3.7 ms |
+| present | 7.0 ms (9362 B, 180 rows) | 7.0 ms |
+| pull round trip, average / worst | 0.74–0.89 ms / 1.7 ms | |
+
+0 misses, 0 unread replies. The frame budget is now about 3.7 + 7.0 + 1.7 = 12.4 ms of 33.3 ms.
+The telemetry line shows the newest value of each row. They agreed with the Mac: memory read
+15.7 % on the device and 40.2 GB of 256 GB on the Mac.
+
+The pure modules (`wire`, `chart`, `framebuf`, `layout`, `ops`) have `#[cfg(test)]` tests. The
+firmware crate builds only for the RP2350, so `device/host-tests/` compiles the same files for the
+Mac. Run it from the repository root, so that `device/.cargo/config.toml` does not force the
+thumb target:
+
+```sh
+cargo test --manifest-path device/host-tests/Cargo.toml
+```

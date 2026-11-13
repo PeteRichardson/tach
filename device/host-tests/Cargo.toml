@@ -1,0 +1,12 @@
+[package]
+name = "tach-device-host-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Runs the firmware's pure modules (wire, chart, framebuf, layout) under cargo test on the Mac"
+
+[lib]
+path = "lib.rs"
+
+# Not part of any workspace: the firmware crate builds for the RP2350 only.
+[workspace]
