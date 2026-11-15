@@ -1,0 +1,6 @@
+# rustup reads this file when cargo runs in device/ or below, and installs the
+# RP2350 target if it is missing. CI runs from the repository root, so the host
+# tests do not see this file and do not download the target.
+[toolchain]
+channel = "stable"
+targets = ["thumbv8m.main-none-eabihf"]

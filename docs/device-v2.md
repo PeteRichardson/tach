@@ -299,8 +299,9 @@ format both follow from these.
 
 Done, 2026-11-12. Details and evidence: [`../device/BRINGUP.md`](../device/BRINGUP.md).
 
-1. Toolchain: `rustup target add thumbv8m.main-none-eabihf`, `brew install picotool probe-rs-tools`.
-   Homebrew's `cargo` hides rustup's, so build with `PATH="$HOME/.cargo/bin:$PATH"`.
+1. Toolchain: rustup, with no Homebrew `rust`; `brew install picotool probe-rs-tools`.
+   `device/rust-toolchain.toml` makes rustup install `thumbv8m.main-none-eabihf`. Homebrew's
+   `cargo` hides rustup's and has no embedded targets, so do not install both.
 2. `device/` cargo project on `rp235x-hal` 0.4, flashed and read over RTT with `probe-rs` through
    the RPi debug probe. No `embedded-graphics` or `sharp-memory-display`: the SHARP driver
    (`device/src/sharp.rs`) and the 1-bit frame buffer are our own, so they implement the ADR-0004
