@@ -174,19 +174,23 @@ fn main() -> ! {
         let numbers = [
             model.cpu.newest().map(text::Number::percent),
             model.gpu.newest().map(text::Number::percent),
-            model.mem_gb.map(text::Number::gb),
+            model.mem.newest().map(text::Number::gb),
         ];
         let now = chart::mac_now(mac_offset_ms, last_reply_us, t0);
         let mut stale = [true; layout::ROWS];
         for (i, (row, stale)) in rows.iter().zip(stale.iter_mut()).enumerate() {
+            // The memory scale, for its limit labels: None until there is memory to zoom to.
+            let mut scale = None;
             match now {
                 Some(now) => {
                     match i {
                         chart::CPU => chart::draw(&model.cpu, row, now, |op| panel.apply(op)),
                         chart::GPU => chart::draw(&model.gpu, row, now, |op| panel.apply(op)),
-                        _ => chart::draw_compressed(&model.mem, row, &mem_axis, now, |op| {
-                            panel.apply(op)
-                        }),
+                        _ => {
+                            scale = chart::draw_compressed(&model.mem, row, &mem_axis, now, |op| {
+                                panel.apply(op)
+                            })
+                        }
                     }
                     *stale = model.is_stale(i, now);
                 }
@@ -196,7 +200,12 @@ fn main() -> ! {
                 Some(n) if !*stale => n,
                 _ => &text::Number::dashes(),
             };
-            text::draw_slot(row, LABELS[i], number, |op| panel.apply(op));
+            if i == chart::MEM {
+                let limits = scale.map(|s| (text::Number::gb(s.lo), text::Number::gb(s.hi)));
+                text::draw_mem_slot(row, LABELS[i], number, limits, |op| panel.apply(op));
+            } else {
+                text::draw_slot(row, LABELS[i], number, |op| panel.apply(op));
+            }
         }
 
         let t1 = timer.get_counter().ticks();
@@ -255,7 +264,7 @@ fn main() -> ! {
         let span = t2 - window_start;
         if span >= TICKS_PER_S {
             rprintln!(
-                "fps {}  draw_us {}  present_us {} ({} B)  rows {}  KB/s {}  rtt_us avg {} max {}  ok {} miss {} unsent {} unread {}  cpu {:?} gpu {:?} mem% {:?}  stale {:?}",
+                "fps {}  draw_us {}  present_us {} ({} B)  rows {}  KB/s {}  rtt_us avg {} max {}  ok {} miss {} unsent {} unread {}  cpu {:?} gpu {:?} mem {:?}  stale {:?}",
                 frames as u64 * TICKS_PER_S / span,
                 draw_us_max,
                 present_us_max,

@@ -331,8 +331,12 @@ Next:
    `chart::draw_compressed`): the right edge travels at 12 px/s like CPU and GPU, the left edge
    is 300 s old, and each column is a min/max stroke over its time span, so a short peak stays
    visible. Memory keeps 3615 buckets of 83 ms (about 87 KB). Marks at 1, 2, 3 and 4 minutes stay
-   in place. With a full 5-minute history, draw takes about 8.2 ms per frame (3.8 ms before),
-   and the panel stays at 29–30 fps. Not yet: the zoomed memory y axis of v1 (design.md 5.2).
+   in place. Its y axis zooms to the 5 minutes (`chart::Scale`, v1 `nice_range`): the lowest and
+   highest GB, rounded out to a step that gives 5 steps or less, with a 1 GB minimum span. The
+   limits show in the 16 px font at the right of the slot, level with the chart's top and bottom
+   lines, and the memory number moves up between them (`text::draw_mem_slot`). With a full
+   5-minute history, draw takes about 8.5 ms per frame (3.8 ms before the memory axis), and the
+   panel stays at 29–30 fps.
 7. Started: `tach-sender.py` answers each `{"pull":N}` with the Q36 keys and the same `pull` value,
    `ok: false` when macmon is stale. CPU from per-core Mach ticks, memory low/high since the last
    reply, GPU from macmon at 10 Hz while the v2 device is connected. A thread serves the v2 device

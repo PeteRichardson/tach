@@ -135,13 +135,11 @@ pub struct Model {
     pub cpu: Fast,
     pub gpu: Fast,
     pub mem: Slow,
-    /// Newest memory used in GB, for the number slot: the chart shows a percent, the number GB.
-    pub mem_gb: Option<f32>,
 }
 
 impl Model {
     pub const fn new() -> Self {
-        Self { cpu: Fast::new(), gpu: Fast::new(), mem: Slow::new(), mem_gb: None }
+        Self { cpu: Fast::new(), gpu: Fast::new(), mem: Slow::new() }
     }
 
     /// True if row `i` (`CPU`, `GPU` or `MEM`) is stale at Mac time `now`.
@@ -161,14 +159,10 @@ impl Model {
         if let (Some(v), Some(t)) = (r.gpu, r.tg) {
             self.gpu.add(t, v, v, v);
         }
-        // Memory goes on the chart as a percent of the Mac's total, so all rows share one scale.
-        if let (Some(gb), Some(t), Some(total)) = (r.mem, r.tm, r.mem_total) {
-            if total > 0.0 {
-                let pct = |g: f32| 100.0 * g / total;
-                let (lo, hi) = (r.mem_lo.unwrap_or(gb), r.mem_hi.unwrap_or(gb));
-                self.mem.add(t, pct(gb), pct(lo), pct(hi));
-                self.mem_gb = Some(gb);
-            }
+        // Memory goes on the chart in GB: its y axis zooms to the 5 minutes (`Scale`).
+        if let (Some(gb), Some(t)) = (r.mem, r.tm) {
+            let (lo, hi) = (r.mem_lo.unwrap_or(gb), r.mem_hi.unwrap_or(gb));
+            self.mem.add(t, gb, lo, hi);
         }
     }
 }
@@ -283,6 +277,39 @@ impl Axis {
     }
 }
 
+/// The memory scale steps, in GB (design.md 5.2). The scale is rounded out to the first step that
+/// gives 5 steps or less, so it does not move on every frame.
+const MEM_STEPS_GB: [f32; 10] = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0];
+/// The smallest span of the memory scale, so that noise does not look large.
+pub const MEM_MIN_SPAN_GB: f32 = 1.0;
+
+/// The memory row's y scale: the lowest and the highest GB in the 5 minutes, rounded out to steps
+/// (v1 `nice_range`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Scale {
+    pub lo: f32,
+    pub hi: f32,
+}
+
+impl Scale {
+    pub fn nice(mut lo: f32, mut hi: f32) -> Self {
+        if hi - lo < MEM_MIN_SPAN_GB {
+            let mid = (lo + hi) / 2.0;
+            (lo, hi) = (mid - MEM_MIN_SPAN_GB / 2.0, mid + MEM_MIN_SPAN_GB / 2.0);
+        }
+        let step = MEM_STEPS_GB.into_iter().find(|&s| (hi - lo) / s <= 5.0).unwrap_or(100.0);
+        // The small bias stops float noise from adding a step: 7.0 / 0.1 is 70.00001.
+        let lo = (libm::floorf(lo / step + 1e-4) * step).max(0.0);
+        let hi = libm::ceilf(hi / step - 1e-4) * step;
+        Self { lo, hi: hi.max(lo + step) }
+    }
+
+    /// Plot row for `gb`: `lo` on the bottom row of the plot area, `hi` on the top.
+    fn y(&self, row: &Row, gb: f32) -> i32 {
+        row.plot_y(100.0 * (gb - self.lo) / (self.hi - self.lo)) as i32
+    }
+}
+
 /// The buckets that fall in one column of the compressed axis, merged.
 #[derive(Clone, Copy)]
 struct Column {
@@ -299,11 +326,19 @@ struct Column {
 /// lowest to the highest value of all its buckets, so a short peak far back in the 5 minutes
 /// still shows (GLOSSARY, "Peak keep"). Two columns join when they are next to each other or when
 /// less than `GAP_MS` lies between them; a longer gap breaks the curve.
-pub fn draw_compressed(series: &Slow, row: &Row, axis: &Axis, now: u64, mut op: impl FnMut(Op)) {
+///
+/// The y axis zooms to the 5 minutes (`Scale`). Returns the scale, for the limit labels, or None
+/// when there is no memory in the window.
+pub fn draw_compressed(
+    series: &Slow,
+    row: &Row,
+    axis: &Axis,
+    now: u64,
+    mut op: impl FnMut(Op),
+) -> Option<Scale> {
     blank(row, &mut op);
     let (left, top, w, _) = row.plot();
     let right = left as i32 + w as i32 - 1;
-    let y_at = |v: f32| row.plot_y(v) as i32;
 
     for age in MEM_MARKS_MS {
         if let Some(x) = axis.column(age) {
@@ -312,25 +347,15 @@ pub fn draw_compressed(series: &Slow, row: &Row, axis: &Axis, now: u64, mut op: 
         }
     }
 
-    let mut newer: Option<Column> = None;
-    let mut stroke = |c: Column| {
-        let x = right - c.x as i32;
-        op(Op::Line { x0: x, y0: y_at(c.hi), x1: x, y1: y_at(c.lo), on: true });
-        if let Some(n) = newer {
-            if c.x - n.x == 1 || n.oldest_t - c.newest_t <= GAP_MS {
-                op(Op::Line { x0: x, y0: y_at(c.last), x1: right - n.x as i32, y1: y_at(n.last), on: true });
-            }
-        }
-        newer = Some(c);
-    };
-
-    // Newest first. A column is drawn when the first bucket of an older column arrives. This walks
-    // up to 3600 buckets on each frame, so it keeps a ring index and a column cursor: no 64-bit
-    // division and no search per bucket.
+    // Merge the buckets into columns, newest first. The scale needs every column before the first
+    // stroke. This walks up to 3600 buckets on each frame, so it keeps a ring index and a column
+    // cursor: no 64-bit division and no search per bucket.
+    let empty = Column { x: 0, lo: 0.0, hi: 0.0, last: 0.0, newest_t: 0, oldest_t: 0 };
+    let mut cols = [empty; MAX_PLOT_W];
+    let mut n = 0;
     let now_span = now / BUCKET_MS;
     let mut slot = (now_span % MEM_BUCKETS as u64) as usize;
     let mut x = 0;
-    let mut col: Option<Column> = None;
     for back in 0..MEM_BUCKETS as u64 {
         let Some(span) = now_span.checked_sub(back) else { break };
         let b = series.buckets[slot];
@@ -346,23 +371,34 @@ pub fn draw_compressed(series: &Slow, row: &Row, axis: &Axis, now: u64, mut op: 
         if x == axis.w {
             break;
         }
-        match &mut col {
+        match cols[..n].last_mut() {
             Some(c) if c.x == x => {
                 c.lo = c.lo.min(b.lo);
                 c.hi = c.hi.max(b.hi);
                 c.oldest_t = t;
             }
             _ => {
-                if let Some(c) = col.take() {
-                    stroke(c);
-                }
-                col = Some(Column { x, lo: b.lo, hi: b.hi, last: b.last, newest_t: t, oldest_t: t });
+                cols[n] = Column { x, lo: b.lo, hi: b.hi, last: b.last, newest_t: t, oldest_t: t };
+                n += 1;
             }
         }
     }
-    if let Some(c) = col {
-        stroke(c);
+    let cols = &cols[..n];
+    let lo = cols.iter().map(|c| c.lo).reduce(f32::min)?;
+    let hi = cols.iter().map(|c| c.hi).reduce(f32::max)?;
+    let scale = Scale::nice(lo, hi);
+    let y_at = |v: f32| scale.y(row, v);
+
+    for (i, c) in cols.iter().enumerate() {
+        let x = right - c.x as i32;
+        op(Op::Line { x0: x, y0: y_at(c.hi), x1: x, y1: y_at(c.lo), on: true });
+        if let Some(n) = i.checked_sub(1).map(|j| cols[j]) {
+            if c.x - n.x == 1 || n.oldest_t - c.newest_t <= GAP_MS {
+                op(Op::Line { x0: x, y0: y_at(c.last), x1: right - n.x as i32, y1: y_at(n.last), on: true });
+            }
+        }
     }
+    Some(scale)
 }
 
 #[cfg(test)]
@@ -537,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn the_model_puts_memory_on_the_chart_as_a_percent_of_the_total() {
+    fn the_model_puts_memory_on_the_chart_in_gb() {
         let mut m = Model::new();
         let r = crate::wire::parse(
             br#"{"pull":1,"v":2,"t":1000,"cpu":12.5,"tc":999,"mem":32.0,"mem_lo":16.0,"mem_hi":64.0,"tm":990,"mem_total":128.0,"ok":false}"#,
@@ -547,7 +583,7 @@ mod tests {
         assert_eq!(m.cpu.newest(), Some(12.5));
         assert_eq!(m.gpu.newest(), None);
         let b = m.mem.bucket(990 / BUCKET_MS).unwrap();
-        assert_eq!((b.lo, b.hi, b.last), (12.5, 50.0, 25.0));
+        assert_eq!((b.lo, b.hi, b.last), (16.0, 64.0, 32.0));
     }
 
     fn mem_row() -> Row {
@@ -615,14 +651,14 @@ mod tests {
     fn a_short_old_memory_peak_survives_the_compression() {
         let mut s = Slow::new();
         let now = 1_000_000;
-        // 10 Hz at 20 %, with one 100 ms sample at 90 % three minutes ago.
+        // 10 Hz at 20 GB, with one 100 ms sample at 90 GB three minutes ago.
         let start = now - MEM_WINDOW_MS + 1000;
         for i in 0..(MEM_WINDOW_MS - 2000) / 100 {
             let t = start + i * 100;
             let v = if t == now - 180_000 { 90.0 } else { 20.0 };
             s.add(t, v, v, v);
         }
-        let peak_y = mem_row().plot_y(90.0) as i32;
+        let peak_y = Scale::nice(20.0, 90.0).y(&mem_row(), 90.0);
         assert!(mem_strokes(&s, now).iter().any(|&(_, top, _)| top == peak_y));
     }
 
@@ -659,5 +695,53 @@ mod tests {
         };
         assert_eq!(marks(1_000_000).len(), 4);
         assert_eq!(marks(1_000_000), marks(1_003_456));
+    }
+
+    #[test]
+    fn the_memory_scale_rounds_out_to_steps_as_in_v1() {
+        // The cases of v1's test_nice_range (tests/test_mem_chart.py). One differs: v1 gives 7.4
+        // for 8.0..8.2, because float noise makes floor(7.6 / 0.2) 37 there. 7.6 is the step.
+        let cases = [
+            ((7.3, 9.1), (7.0, 9.5)),
+            ((8.0, 8.2), (7.6, 8.6)),
+            ((0.0, 0.1), (0.0, 0.6)),
+            ((12.4, 61.9), (10.0, 70.0)),
+            ((100.0, 127.5), (100.0, 130.0)),
+            ((-2.0, 0.3), (0.0, 0.5)),
+        ];
+        for ((lo, hi), (want_lo, want_hi)) in cases {
+            let s = Scale::nice(lo, hi);
+            assert!((s.lo - want_lo).abs() < 1e-3 && (s.hi - want_hi).abs() < 1e-3, "{lo}..{hi}: {s:?}");
+        }
+    }
+
+    #[test]
+    fn the_memory_scale_holds_still_while_memory_moves_a_little() {
+        assert_eq!(Scale::nice(61.2, 63.9), Scale::nice(61.4, 63.6));
+    }
+
+    #[test]
+    fn the_memory_row_zooms_to_its_five_minutes() {
+        let mut s = Slow::new();
+        let now = 1_000_000;
+        // 61 to 63 GB: on a 0-128 GB axis this is a flat line 1 px high.
+        for i in 0..1000 {
+            let v = 61.0 + (i % 21) as f32 / 10.0;
+            s.add(now - 100_000 + i * 100, v, v, v);
+        }
+        let row = mem_row();
+        let axis = Axis::new(row.plot().2);
+        let scale = draw_compressed(&s, &row, &axis, now, |_| {});
+        assert_eq!(scale, Some(Scale { lo: 61.0, hi: 63.0 }));
+        let ys: Vec<i32> = mem_strokes(&s, now).iter().flat_map(|&(_, a, b)| [a, b]).collect();
+        let span = ys.iter().max().unwrap() - ys.iter().min().unwrap();
+        assert!(span as u16 > row.plot().3 / 2, "the curve fills {span} px");
+    }
+
+    #[test]
+    fn an_empty_memory_row_has_no_scale() {
+        let row = mem_row();
+        let axis = Axis::new(row.plot().2);
+        assert_eq!(draw_compressed(&Slow::new(), &row, &axis, 1_000_000, |_| {}), None);
     }
 }

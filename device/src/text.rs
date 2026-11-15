@@ -116,12 +116,47 @@ impl core::fmt::Write for Number {
 /// Clear the number slot of `row`, then draw its label at the top left and its number on the
 /// chart's bottom line, right-aligned so that "%" and "G" line up in one column on every row.
 pub fn draw_slot(row: &Row, label: &[u8], number: &Number, mut op: impl FnMut(Op)) {
+    clear_with_label(row, label, &mut op);
+    draw_number(row, number, row.number_baseline() as i32, &mut op);
+}
+
+/// The memory slot: as `draw_slot`, with the limits of the zoomed y axis (design.md 5.2) as
+/// small labels at the right of the slot, the top limit level with the chart's top and the bottom
+/// limit level with its bottom. The number moves up to sit between them, so that the curve and the
+/// number never cover a limit. With no limits (no memory in the window) that space stays empty, and
+/// the number keeps its raised place, so it does not jump when the limits come.
+pub fn draw_mem_slot(
+    row: &Row,
+    label: &[u8],
+    number: &Number,
+    limits: Option<(Number, Number)>,
+    mut op: impl FnMut(Op),
+) {
+    clear_with_label(row, label, &mut op);
+    let right = row.number_right() as i32;
+    let (top, bottom) = (row.label_baseline() as i32, row.number_baseline() as i32);
+    if let Some((lo, hi)) = &limits {
+        for (text, baseline) in [(hi.as_bytes(), top), (lo.as_bytes(), bottom)] {
+            LABELS.draw(text, right - LABELS.width(text), baseline, true, &mut op);
+        }
+    }
+    // Centre the number's digits in the rows between the two limits.
+    let small = LABELS.get(b'0').map_or(0, |g| g.h as i32);
+    let big = DIGITS.get(b'0').map_or(0, |g| g.h as i32);
+    let free = bottom - small - top;
+    draw_number(row, number, top + (free - big) / 2 + big, &mut op);
+}
+
+fn clear_with_label(row: &Row, label: &[u8], op: &mut impl FnMut(Op)) {
     let (x, y, w, h) = row.slot();
     op(Op::Rect { x: x as i32, y: y as i32, w, h, fill: true, t: 0, on: false });
-    LABELS.draw(label, x as i32, row.label_baseline() as i32, true, &mut op);
+    LABELS.draw(label, x as i32, row.label_baseline() as i32, true, op);
+}
+
+fn draw_number(row: &Row, number: &Number, baseline: i32, op: &mut impl FnMut(Op)) {
     let text = number.as_bytes();
     let right = row.number_right() as i32;
-    DIGITS.draw(text, right - DIGITS.width(text), row.number_baseline() as i32, true, &mut op);
+    DIGITS.draw(text, right - DIGITS.width(text), baseline, true, op);
 }
 
 #[cfg(test)]
@@ -132,7 +167,26 @@ mod tests {
     fn ink(label: &[u8], number: &Number) -> Vec<(i32, i32)> {
         let row = layout::rows(400, 240)[0];
         let mut lit = Vec::new();
-        draw_slot(&row, label, number, |op| {
+        draw_slot(&row, label, number, lit_pixels(&mut lit));
+        lit
+    }
+
+    /// Glyph ink of the memory slot, by part: the limits (top, bottom) and the number.
+    fn mem_ink(number: &Number, lo: f32, hi: f32) -> [Vec<(i32, i32)>; 3] {
+        let row = layout::rows(400, 240)[2];
+        let mut all = Vec::new();
+        draw_mem_slot(&row, b"MEM", number, Some((Number::gb(lo), Number::gb(hi))), lit_pixels(&mut all));
+        let label_right = ink(b"MEM", &Number::dashes()).iter().map(|p| p.0).max().unwrap();
+        let (top, bottom) = (row.label_baseline() as i32, row.number_baseline() as i32);
+        let small = |p: &&(i32, i32)| p.1 < top || p.1 >= bottom - 12;
+        let limit_top = all.iter().filter(|p| p.1 < top && p.0 > label_right).copied().collect();
+        let limit_bottom = all.iter().filter(|p| p.1 >= bottom - 12).copied().collect();
+        let number = all.iter().filter(|p| !small(p)).copied().collect();
+        [limit_top, limit_bottom, number]
+    }
+
+    fn lit_pixels(lit: &mut Vec<(i32, i32)>) -> impl FnMut(Op) + '_ {
+        |op| {
             if let Op::Glyph { x, y, glyph, .. } = op {
                 for gy in 0..glyph.h {
                     for gx in 0..glyph.w {
@@ -142,8 +196,7 @@ mod tests {
                     }
                 }
             }
-        });
-        lit
+        }
     }
 
     #[test]
@@ -151,7 +204,7 @@ mod tests {
         for c in b"0123456789.%G-" {
             assert!(DIGITS.get(*c).is_some(), "digit atlas lacks {}", *c as char);
         }
-        for c in b"CPUGME" {
+        for c in b"CPUGME0123456789." {
             assert!(LABELS.get(*c).is_some(), "label atlas lacks {}", *c as char);
         }
     }
@@ -204,5 +257,30 @@ mod tests {
         let label_bottom = lit.iter().filter(|p| p.1 <= row.label_baseline() as i32).map(|p| p.1).max();
         let number_top = lit.iter().filter(|p| p.1 > row.label_baseline() as i32).map(|p| p.1).min();
         assert!(number_top.unwrap() - label_bottom.unwrap() > 4);
+    }
+
+    #[test]
+    fn the_memory_limits_sit_level_with_the_chart_edges_and_the_number_between() {
+        let row = layout::rows(400, 240)[2];
+        let [top, bottom, number] = mem_ink(&Number::gb(128.0), 100.0, 130.0);
+        let ys = |v: &Vec<(i32, i32)>| (v.iter().map(|p| p.1).min().unwrap(), v.iter().map(|p| p.1).max().unwrap());
+        assert_eq!(ys(&top).1, row.label_baseline() as i32 - 1);
+        assert_eq!(ys(&bottom).1, row.number_baseline() as i32 - 1);
+        let (n_top, n_bottom) = ys(&number);
+        assert!(n_top - ys(&top).1 > 3 && ys(&bottom).0 - n_bottom > 3, "{:?} {:?} {:?}", ys(&top), (n_top, n_bottom), ys(&bottom));
+        // The space above and below the number is the same, to 1 px.
+        assert!(((n_top - ys(&top).1) - (ys(&bottom).0 - n_bottom)).abs() <= 1);
+    }
+
+    #[test]
+    fn the_memory_slot_stays_inside_the_slot_and_lines_up_on_the_right() {
+        let row = layout::rows(400, 240)[2];
+        let (x, y, w, h) = row.slot();
+        let [top, bottom, number] = mem_ink(&Number::gb(9999.0), 99.5, 99.9);
+        for &(px, py) in top.iter().chain(&bottom).chain(&number) {
+            assert!(px >= x as i32 && px < (x + w) as i32 && py >= y as i32 && py < (y + h) as i32);
+        }
+        let right = |v: &Vec<(i32, i32)>| v.iter().map(|p| p.0).max().unwrap();
+        assert!((right(&top) - right(&number)).abs() <= 2 && (right(&bottom) - right(&number)).abs() <= 2);
     }
 }
