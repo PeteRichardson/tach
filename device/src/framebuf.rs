@@ -5,7 +5,6 @@
 //! pixel of a byte out first, which is why this is not the "obvious" little-endian layout.
 //! See docs/device-v2.md, Mac-side sources and device/WIRING.md.
 
-use crate::ops::Madrs;
 use crate::text::Glyph;
 
 /// Bytes in one panel row at 400 px wide.
@@ -44,6 +43,7 @@ impl Framebuf {
     }
 
     /// Set which level counts as the background, for the mono level map.
+    #[cfg(test)]
     pub fn set_background_on(&mut self, on: bool) {
         self.background_on = on;
     }
@@ -64,12 +64,6 @@ impl Framebuf {
             self.rows[y][x / 8] &= !(1 << bit);
         }
         self.dirty[y] = true;
-    }
-
-    /// Light a pixel if `on` matches the background level, inverted as needed.
-    #[inline]
-    pub fn set_level(&mut self, x: i32, y: i32, foreground: bool) {
-        self.set(x, y, foreground);
     }
 
     /// Fill a rectangle. Coordinates are inclusive of the top-left and exclusive of the
@@ -117,16 +111,6 @@ impl Framebuf {
             self.fill_rect(x - i, y, 1, hh as u16, on);
             self.fill_rect(x + ww - 1 + i, y, 1, hh as u16, on);
         }
-    }
-
-    /// Horizontal line.
-    pub fn hline(&mut self, x: i32, y: i32, len: u16, on: bool) {
-        self.fill_rect(x, y, len, 1, on);
-    }
-
-    /// Vertical line.
-    pub fn vline(&mut self, x: i32, y: i32, len: u16, on: bool) {
-        self.fill_rect(x, y, 1, len, on);
     }
 
     /// Bresenham line, integer only. Used for the axis rules and the self-test marks, not for the
@@ -211,34 +195,20 @@ impl Framebuf {
         out
     }
 
-    /// Mark every row dirty, for a forced full refresh.
-    pub fn mark_all_dirty(&mut self) {
-        self.dirty = [true; HEIGHT];
-    }
-
     /// Raw row bytes, for the panel driver.
     pub fn row(&self, y: usize) -> &[u8; ROW_BYTES] {
         &self.rows[y]
     }
 
-    /// Fill the whole panel with `on`, ignoring the background inversion. Used by the self-test so
-    /// that "all pixels lit" means exactly that.
+    /// Fill the whole panel with `on`, ignoring the background inversion, so that "all pixels lit"
+    /// means exactly that.
+    #[cfg(test)]
     pub fn fill_raw(&mut self, on: bool) {
         let byte = if on { 0xff } else { 0x00 };
         for row in self.rows.iter_mut() {
             *row = [byte; ROW_BYTES];
         }
         self.dirty = [true; HEIGHT];
-    }
-
-    /// Translate a [`Madrs`] flip into row and column mapping for the self-test.
-    pub fn flip(&self, m: Madrs, x: usize, y: usize) -> (usize, usize) {
-        match m {
-            Madrs::Normal => (x, y),
-            Madrs::MirrorX => (WIDTH - 1 - x, y),
-            Madrs::MirrorY => (x, HEIGHT - 1 - y),
-            Madrs::MirrorXY => (WIDTH - 1 - x, HEIGHT - 1 - y),
-        }
     }
 }
 

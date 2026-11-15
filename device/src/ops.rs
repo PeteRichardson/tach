@@ -5,20 +5,6 @@
 
 use crate::text::Glyph;
 
-/// Which corner of the panel maps to (0,0). The RA8875 has a MADR-style register; the shim only
-/// needs it so that a rotated target panel can be previewed on the scaffold.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Madrs {
-    /// (0,0) top-left.
-    Normal,
-    /// (0,0) top-right.
-    MirrorX,
-    /// (0,0) bottom-left.
-    MirrorY,
-    /// (0,0) bottom-right.
-    MirrorXY,
-}
-
 /// One drawing instruction.
 #[derive(Clone, Copy, Debug)]
 pub enum Op {
@@ -26,6 +12,7 @@ pub enum Op {
     /// level table.
     Clear { on: bool },
     /// One pixel.
+    #[allow(dead_code, reason = "op vocabulary (ADR-0004), kept for the RA8875 backend")]
     Pix { x: i32, y: i32, on: bool },
     /// Straight line between two points, 1 px wide.
     Line { x0: i32, y0: i32, x1: i32, y1: i32, on: bool },
@@ -42,6 +29,7 @@ pub enum Op {
     /// Move the pixels of a window left by whole pixels, dropping the leftmost columns and
     /// vacating the right. Pixels outside the window do not move. Hardware scroll window on the
     /// RA8875; a bit loop on the shim.
+    #[allow(dead_code, reason = "op vocabulary (ADR-0004), kept for the RA8875 backend")]
     ShiftBand {
         left: u16,
         top: u16,
@@ -54,6 +42,7 @@ pub enum Op {
     /// the shim.
     Glyph { x: i32, y: i32, glyph: &'static Glyph, on: bool },
     /// Backlight, 0 to 100. The scaffold has no backlight, so it ignores this.
+    #[allow(dead_code, reason = "op vocabulary (ADR-0004), kept for the RA8875 backend")]
     Brightness { percent: u8 },
 }
 

@@ -26,8 +26,6 @@ use embedded_hal::spi::SpiBus;
 
 /// Write one or more lines: command bit 7.
 const CMD_WRITE_LINE: u8 = 0x80;
-/// Clear the whole panel memory: command bit 5.
-const CMD_CLEAR_MEMORY: u8 = 0x20;
 /// VCOM polarity: bit 6.
 const CMD_VCOM: u8 = 0x40;
 /// Recommended filler byte.
@@ -44,9 +42,6 @@ pub struct Sharp<SPI, CS, DISP> {
     pub last_flush_bytes: usize,
     /// Rows sent by the last present().
     pub last_flush_rows: usize,
-    /// Panel orientation requested by the layout. The shim applies it in software at draw time by
-    /// the caller; stored here so a target-panel port has somewhere to put it.
-    pub madrs: crate::ops::Madrs,
 }
 
 impl<SPI, CS, DISP> Sharp<SPI, CS, DISP>
@@ -68,7 +63,6 @@ where
             vcom_high: true,
             last_flush_bytes: 0,
             last_flush_rows: 0,
-            madrs: crate::ops::Madrs::Normal,
         }
     }
 
@@ -76,44 +70,6 @@ where
     /// per the panel note.
     pub fn enable(&mut self) {
         let _ = self.disp.set_high();
-    }
-
-    /// Power the panel down. The image stays on the glass — that is what memory-in-pixel means.
-    pub fn disable(&mut self) {
-        let _ = self.disp.set_low();
-    }
-
-    /// The frame buffer, for the shim and the self-test.
-    pub fn framebuf(&mut self) -> &mut Framebuf {
-        &mut self.fb
-    }
-
-    /// Send a command with no row data, with CS asserted around it.
-    fn command(&mut self, byte: u8) {
-        let _ = self.cs.set_high();
-        let _ = self.spi.write(&[byte]);
-        let _ = self.spi.flush();
-        let _ = self.cs.set_low();
-    }
-
-    /// Ask the panel to clear its own memory. Cheap: one command, no pixel traffic.
-    pub fn clear_panel(&mut self) {
-        self.vcom_high = !self.vcom_high;
-        self.command(CMD_CLEAR_MEMORY | if self.vcom_high { CMD_VCOM } else { 0 });
-        let _ = self.cs.set_high();
-        let _ = self.spi.write(&[DUMMY]);
-        let _ = self.spi.flush();
-        let _ = self.cs.set_low();
-    }
-
-    /// Toggle VCOM without writing pixels. Do this at least once a second while the panel is up.
-    pub fn vcom_toggle(&mut self) {
-        self.vcom_high = !self.vcom_high;
-        self.command(if self.vcom_high { CMD_VCOM } else { 0 });
-        let _ = self.cs.set_high();
-        let _ = self.spi.write(&[DUMMY]);
-        let _ = self.spi.flush();
-        let _ = self.cs.set_low();
     }
 
     /// Push the changed rows to the glass, then clear the dirty marks.

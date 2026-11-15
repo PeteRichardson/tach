@@ -88,6 +88,3 @@ pub fn rows(panel_w: u16, panel_h: u16) -> [Row; ROWS] {
         panel_w,
     })
 }
-
-/// Whole-pixel spacing of grid ticks, for the fixed-point arithmetic in the frame loop.
-pub const GRID_TICK_PX_X100: u32 = (TRAVEL_PX_PER_S * GRID_TICK_S * 100.0) as u32;

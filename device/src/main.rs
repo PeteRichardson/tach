@@ -94,7 +94,7 @@ fn main() -> ! {
     };
 
     let sio = Sio::new(pac.SIO);
-    let mut pins = Pins::new(pac.IO_BANK0, pac.PADS_BANK0, sio.gpio_bank0, &mut resets);
+    let pins = Pins::new(pac.IO_BANK0, pac.PADS_BANK0, sio.gpio_bank0, &mut resets);
 
     // SPI0: GP18 SCK, GP19 MOSI. No MISO — the panel takes data only. The HAL pin tuple for a
     // two-wire set is (Tx, Sck); see rp235x_hal::spi::pins.
