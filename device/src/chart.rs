@@ -123,6 +123,17 @@ impl<const N: usize> Series<N> {
     pub fn newest(&self) -> Option<f32> {
         self.bucket(self.last_t? / BUCKET_MS).map(|b| b.last)
     }
+
+    /// The mean of the newest value of each bucket in the `window_ms` that ends at the newest
+    /// sample, for the big number. Empty buckets do not count, so a gap does not pull it to zero.
+    pub fn mean(&self, window_ms: u64) -> Option<f32> {
+        let end = self.last_t? / BUCKET_MS;
+        let start = end.saturating_sub((window_ms / BUCKET_MS).max(1) - 1);
+        let (sum, n) = (start..=end)
+            .filter_map(|span| self.bucket(span))
+            .fold((0.0, 0u32), |(sum, n), b| (sum + b.last, n + 1));
+        (n > 0).then(|| sum / n as f32)
+    }
 }
 
 /// The history of a CPU or GPU row.
@@ -427,6 +438,26 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn the_mean_covers_the_window_that_ends_at_the_newest_sample() {
+        let mut s = Fast::new();
+        assert_eq!(s.mean(1000), None);
+        // One sample per bucket, 0 to 19. A 1 s window is 12 buckets: the newest 12 are 8 to 19.
+        for i in 0..20u64 {
+            s.add(100 * BUCKET_MS + i * BUCKET_MS, i as f32, i as f32, i as f32);
+        }
+        assert_eq!(s.mean(1000), Some((8..20).sum::<u64>() as f32 / 12.0));
+        assert_eq!(s.mean(BUCKET_MS), Some(19.0));
+    }
+
+    #[test]
+    fn the_mean_skips_empty_buckets() {
+        let mut s = Fast::new();
+        s.add(100 * BUCKET_MS, 10.0, 10.0, 10.0);
+        s.add(105 * BUCKET_MS, 30.0, 30.0, 30.0);
+        assert_eq!(s.mean(1000), Some(20.0));
     }
 
     #[test]

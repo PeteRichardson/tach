@@ -51,6 +51,11 @@ const SPI_HZ: u32 = 12_000_000;
 const LABELS: [&[u8]; layout::ROWS] = [b"CPU", b"GPU", b"MEM"];
 /// Target frames per second.
 const FPS: u32 = 30;
+/// The CPU and GPU numbers show the mean of this much history. One sample alone jumps by 10 to 15
+/// points from one frame to the next, which is too fast to read.
+const NUMBER_MEAN_MS: u64 = 1000;
+/// The CPU and GPU numbers change only this often. Memory changes slowly and updates every frame.
+const NUMBER_REFRESH_US: u64 = 300_000;
 
 /// The RP2350 timer runs at 1 MHz, so ticks are microseconds.
 const TICKS_PER_S: u64 = 1_000_000;
@@ -164,6 +169,10 @@ fn main() -> ! {
     let mut unsent: u32 = 0; // port not open, or no room in the USB buffer
     let mut unread: u32 = 0; // matching reply, but not a version 2 object
 
+    // The CPU and GPU numbers on the glass, held between refreshes.
+    let mut fast_numbers: [Option<text::Number>; 2] = [None, None];
+    let mut next_number_us: u64 = 0;
+
     loop {
         let t0 = timer.get_counter().ticks();
 
@@ -171,11 +180,15 @@ fn main() -> ! {
         // clock (ADR-0002). The reply read at the end of this frame shows on the next one. With
         // no Mac time (no reply yet, or none for STALE_MS) the plots are blank, and every row is
         // stale. A stale row shows "--" in its number slot.
-        let numbers = [
-            model.cpu.newest().map(text::Number::percent),
-            model.gpu.newest().map(text::Number::percent),
-            model.mem.newest().map(text::Number::gb),
-        ];
+        if t0 >= next_number_us {
+            fast_numbers = [
+                model.cpu.mean(NUMBER_MEAN_MS).map(text::Number::percent),
+                model.gpu.mean(NUMBER_MEAN_MS).map(text::Number::percent),
+            ];
+            next_number_us = t0 + NUMBER_REFRESH_US;
+        }
+        let [cpu_number, gpu_number] = &fast_numbers;
+        let numbers = [cpu_number, gpu_number, &model.mem.newest().map(text::Number::gb)];
         let now = chart::mac_now(mac_offset_ms, last_reply_us, t0);
         let mut stale = [true; layout::ROWS];
         for (i, (row, stale)) in rows.iter().zip(stale.iter_mut()).enumerate() {
