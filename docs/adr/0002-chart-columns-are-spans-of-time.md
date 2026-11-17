@@ -13,5 +13,5 @@ The device keeps the sample history and recomputes the columns on every frame, s
 RAM for that history. It does not need to transfer a whole frame each time: what changes is
 the shift plus the newest columns. That distinction is what makes the model workable on the
 RA8875, whose 12 MHz SPI link cannot carry a whole 480 × 272 frame 30 times each second.
-This decision supersedes the column-per-sample wording in design.md sections 5 and 6.2, and
+This decision supersedes the column-per-sample wording in pyportal/design.md sections 5 and 6.2, and
 it makes the `macmon` sample-rate ceiling irrelevant to motion.

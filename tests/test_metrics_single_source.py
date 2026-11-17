@@ -27,7 +27,7 @@ def test_full_scale_is_always_numeric(tach_code):
 
 
 def test_parse_loop_keys_come_from_metrics(tach_code, codepy_source):
-    # The keys are design.md 5.1's metric set; the parse loop must read them
+    # The keys are pyportal/design.md 5.1's metric set; the parse loop must read them
     # from METRICS, not repeat a hard-coded tuple that can drift from the
     # table. The regex catches any quoting or spacing of the key triple. This
     # asserts on text, not behavior: the loop lives inside main(), which does

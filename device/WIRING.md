@@ -78,8 +78,8 @@ compliant.
 
 ## The previous panel (SHARP 2.7")
 
-Until the RA8875 driver lands, `device/src/main.rs` still drives the Adafruit 2.7" 400×240 SHARP
-Memory Display (PID 4694). Its wiring shared SPI0 SCK/MOSI on GP18/GP19, used GP17 as an **active
+Before the RA8875, `device/src/main.rs` drove the Adafruit 2.7" 400×240 SHARP Memory Display
+(PID 4694). It no longer does. Its wiring shared SPI0 SCK/MOSI on GP18/GP19, used GP17 as an **active
 high** CS and GP16 as `DISP`, and took 5 V from VBUS on `VIN`. GP16 is MISO on the RA8875, so
 the two panels cannot stay wired at the same time. The SHARP SPI settings were `MODE_1`, 12 MHz,
 MSB first.

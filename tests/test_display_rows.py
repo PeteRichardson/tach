@@ -13,7 +13,7 @@ def test_base_row_requires_numeric_full_scale(tach_code):
 
 
 def test_mem_row_autoscales_and_pushes(tach_code):
-    # design.md 5.2: the MEM y axis follows the data, so MemRow ignores its
+    # pyportal/design.md 5.2: the MEM y axis follows the data, so MemRow ignores its
     # table full_scale. Construction from METRICS must pass the guard, and a
     # push must draw without a fixed scale.
     _, rows = tach_code.build_display(tach_code.terminalio.FONT, 1, True)

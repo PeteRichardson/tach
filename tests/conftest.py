@@ -18,7 +18,7 @@ from unittest import mock
 
 import pytest
 
-CODE_PATH = os.path.join(os.path.dirname(__file__), "..", "code.py")
+CODE_PATH = os.path.join(os.path.dirname(__file__), "..", "pyportal", "code.py")
 
 
 class FakeBitmap:

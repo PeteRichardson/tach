@@ -1,84 +1,85 @@
 # Tach
 
 Tach is a small external display that shows live CPU, GPU and memory use of a
-Mac. It uses an Adafruit PyPortal and one USB cable. The main use is to monitor
-the Mac while it runs local LLMs.
+Mac. It is a Raspberry Pi Pico 2 with an RA8875 driver board and a 4.3"
+480×272 TFT, on one USB cable. The firmware is Rust. The main use is to
+monitor the Mac while it runs local LLMs.
 
-![The Tach display: each row shows a label, a big number and a live chart for CPU, GPU and memory](images/tach.jpg)
+![The Tach display on the RA8875 panel: each row shows a label, a big number and a live chart for CPU, GPU and memory](images/tach-ra8875.jpg)
 
-Each row has a big number and a chart. The CPU and GPU charts show
-approximately the last 1.7 minutes. The MEM chart shows the last 5 minutes on
-a compressed time axis, and its scale zooms to the data. The
-display updates two times each second. Memory is "Memory Used", the same value
-as in Activity Monitor.
+Each row has a big number and a chart. The display draws 30 frames each
+second, and the charts travel smoothly at 12 pixels each second:
 
-The full design is in [design.md](design.md).
+- The CPU and GPU charts show the last 32 seconds. Their numbers are the mean
+  of the last second.
+- The MEM chart shows the last 5 minutes on a compressed time axis. Its right
+  edge travels at the same speed as the other charts. Its scale zooms to the
+  data, and the limits show at the left of the chart. Memory is "Memory Used",
+  the same value as in Activity Monitor.
+- A row that gets no new data for 5 seconds shows "--".
 
-Version 2 (`device/`) shows the same display on a Raspberry Pi Pico 2 with an
-RA8875 driver board and a 4.3" 480×272 TFT. It draws at 30 frames each second.
-The design is in [docs/device-v2.md](docs/device-v2.md).
+The design is in [docs/device-v2.md](docs/device-v2.md), with the decisions in
+[docs/adr/](docs/adr/) and the terms in [GLOSSARY.md](GLOSSARY.md).
 
-![The v2 display on the RA8875 panel: the same CPU, GPU and memory rows, in colour](images/tach-ra8875.jpg)
+The first version ran in CircuitPython on an Adafruit PyPortal. It is in
+[pyportal/](pyportal/README.md).
 
 ## Files
 
-| File | Where it runs | What it does |
+| Path | Where it runs | What it does |
 |---|---|---|
-| `boot.py` | PyPortal | Enables a second USB serial channel for Tach data. |
-| `code.py` | PyPortal | Reads the data and shows the display. |
-| `tach-sender.py` | Mac | Reads CPU, GPU and memory data. Sends one line each 0.5 seconds to the PyPortal, and answers each pull from the v2 device (`device/`). |
+| `device/` | Pico 2 | Rust firmware. Asks the Mac for one sample each frame and draws the display. |
+| `tach-sender.py` | Mac | Reads CPU, GPU and memory data, and answers each request from the device. |
+| `launchd/` | Mac | Starts `tach-sender.py` when you log in. |
+| `fonts/` | Mac (build) | The fonts, as BDF files. The firmware build bakes them into the image. |
+| `pyportal/` | PyPortal | Version 1, in CircuitPython. |
+
+## Hardware
+
+| Part | Notes |
+|---|---|
+| Raspberry Pi Pico 2 (RP2350) | Not the Pico 2 W. |
+| Adafruit RA8875 driver board (PID 1590) | Rev E. |
+| 4.3" 480×272 40-pin TFT | On the driver board's FPC connector. |
+| 10 kΩ resistor | Pull-up on CS. |
+| Raspberry Pi Debug Probe | To flash the firmware and read its log. |
+
+The wiring, the checks before power and the SPI limits are in
+[device/WIRING.md](device/WIRING.md).
 
 ## Requirements
 
-- A Mac with Apple Silicon. The script uses `macmon`, which does not work on Intel Macs.
-- An Adafruit PyPortal with CircuitPython 9 or later.
+- A Mac with Apple Silicon. The script uses `macmon` for the GPU, which does
+  not work on Intel Macs.
 - [Homebrew](https://brew.sh) and [uv](https://docs.astral.sh/uv/).
+- [rustup](https://rustup.rs). Do not also install Homebrew's `rust`: its
+  `cargo` hides rustup's and has no embedded targets.
 
 ## Set up the Mac
 
 ```sh
 git clone https://github.com/PeteRichardson/tach.git
 cd tach
-brew install macmon
+brew install macmon probe-rs-tools
 uv sync
 ```
 
-`uv sync` makes `.venv` with `pyserial`, and `circup` for the device libraries.
-The script does not need `sudo`.
+`uv sync` makes `.venv` with `pyserial`. The script does not need `sudo`.
 
-## Set up the PyPortal
+## Flash the device
 
-1. **Update the firmware.** Look at the first line of `CIRCUITPY/boot_out.txt`.
-   If the version is older than 9, install the latest stable `.uf2` file from
-   <https://circuitpython.org/board/pyportal/>. To install it, double-click
-   RESET to get the `PORTALBOOT` drive, then drag the file onto the drive.
+Connect the debug probe to the Pico 2 (SWDIO GP20, SWCLK GP21, GND), and
+connect the Pico 2 USB port to the Mac. Then:
 
-   An old board can also have an old bootloader. Look at
-   `PORTALBOOT/INFO_UF2.TXT`. If the bootloader is older than v3, first install
-   `update-bootloader-pyportal_m4-<version>.uf2` from
-   <https://github.com/adafruit/uf2-samdx1/releases>. Use the `.uf2` file, not
-   the `.bin` file. Do not disconnect the board while it updates.
+```sh
+cd device
+cargo run --release
+```
 
-2. **Install the libraries.** If you updated from an old CircuitPython version,
-   first delete `CIRCUITPY/lib/`. Old `.mpy` files do not work on new versions.
-
-   ```sh
-   uv run circup install adafruit_display_text adafruit_bitmap_font
-   ```
-
-3. **Add a font (optional).** Put a BDF or PCF font, approximately 36 px high,
-   at `CIRCUITPY/fonts/tach-36.bdf`. If there is no font, the device uses the
-   scaled built-in font, which is blocky. To make a BDF font from a TTF font,
-   see Adafruit's guide "Custom Fonts for CircuitPython Displays".
-
-4. **Copy the code.** Copy `boot.py` and `code.py` to `CIRCUITPY`.
-
-5. **Push RESET one time.** `boot.py` takes effect only after a hard reset.
-   Then this command must show two ports for the PyPortal:
-
-   ```sh
-   ls /dev/cu.usbmodem*
-   ```
+`device/rust-toolchain.toml` makes rustup install the RP2350 target the first
+time. `cargo run` flashes the image with `probe-rs` and then shows the device
+log. The log line `fps ...` gives the frame rate and the draw time each second.
+Push Ctrl-C to stop the log. The device continues to run.
 
 ## Run
 
@@ -86,12 +87,12 @@ The script does not need `sudo`.
 uv run tach-sender.py
 ```
 
-The script finds the PyPortal data port automatically. If the device
-disconnects, the script waits and connects again. Push Ctrl-C to stop it.
+The script finds the device on USB by its product name, "tach device". If the
+device disconnects, the script waits and connects again. Push Ctrl-C to stop
+it.
 
 | Option | What it does |
 |---|---|
-| `--port /dev/cu.usbmodemNNNN` | Use this port. Use it if the script selects the wrong port. |
 | `--stdout` | Print the data lines. Do not use USB. |
 
 ## Start at login
@@ -110,50 +111,39 @@ The script uses the Python in `.venv`, so run `uv sync` first. Run
 is in `~/Library/Logs/tach-sender.log`.
 
 When the agent runs, do not also start `uv run tach-sender.py`. Only one
-program can use the data port.
+program can use the device.
 
 ## Development
 
-Set up the host tools once, then run them for every change:
+Run these for every change:
 
 ```sh
-uv sync             # install pytest and ruff into .venv
-uv run pytest       # run the tests
-uv run ruff check   # run the lint
-cargo test --manifest-path device/host-tests/Cargo.toml   # run the firmware tests on the Mac
+cargo test --manifest-path device/host-tests/Cargo.toml   # firmware tests, on the Mac
+uv run pytest                                             # tach-sender.py and pyportal/ tests
+uv run ruff check                                         # Python lint
 ```
 
-GitHub Actions runs both commands on every push and pull request
-(`.github/workflows/ci.yml`). The tests need no device attached: `code.py`
-runs against fake display modules, and the memory tests use recorded
-`macmon pipe` data.
+Run the firmware tests from the repository root, so that
+`device/.cargo/config.toml` does not force the RP2350 target. The tests need
+no device attached.
 
-## Test the display without the Mac
+GitHub Actions runs all three on every pull request and on every merge to
+`main` (`.github/workflows/ci.yml`).
 
-In `CIRCUITPY/code.py`, set `DEMO = True`. The device then shows test data and
-does not read USB. Set `DEMO = False` to use real data again.
+The bring-up log, with the measurements and the problems found on the
+hardware, is in [device/BRINGUP.md](device/BRINGUP.md).
+`cargo run --release --bin ra8875_bringup` runs a test of each wire and of
+the SPI link.
 
 ## Troubleshooting
 
 | Problem | What to do |
 |---|---|
-| The numbers are grey. | The device got no data for 5 seconds. Make sure that `tach-sender.py` runs. |
-| NO FONT at the top of the screen; blocky numbers. | The big font did not load: the file is missing or damaged, or the `adafruit_bitmap_font` library in `lib/` is broken. Copy a BDF font to `/fonts/tach-36.bdf`, then push RESET. |
-| `found only one Adafruit port` | `boot.py` is not on the device, or you did not push RESET after you copied it. |
-| The script does not find the device. | Run `ls /dev/cu.usbmodem*`. Give the higher-numbered PyPortal port with `--port`. |
-| The MEM chart does not show the full size of a model. | The LLM runtime maps the model file into memory (mmap). See design.md, section 5.1. |
-| Errors on the device | Open the serial console: `screen /dev/cu.usbmodem<lower number> 115200`. To stop `screen`, push Ctrl-A, then K, then Y. |
-
-## Message format
-
-`tach-sender.py` sends one JSON object on each line:
-
-```json
-{"cpu":34.0,"gpu":88.0,"mem":97.4,"mem_total":128.0}
-```
-
-`cpu` and `gpu` are in %. `mem` and `mem_total` are in GB. The device ignores
-keys that it does not know. See design.md, section 7.
+| A row shows "--". | That row got no new data for 5 seconds. If only GPU shows "--", macmon stopped. If all rows do, make sure that `tach-sender.py` runs. |
+| The charts are blank. | The device got no reply from the Mac for 5 seconds. Make sure that `tach-sender.py` runs, and that no other program uses the device port. |
+| The panel stays dark. | Look at the FPC ribbon direction in [device/WIRING.md](device/WIRING.md), "Checks before power". |
+| Random shapes on the panel. | SPI writes are lost. Look at the SPI settings in [device/WIRING.md](device/WIRING.md). |
+| The MEM chart does not show the full size of a model. | The LLM runtime maps the model file into memory (mmap). See [pyportal/design.md](pyportal/design.md), section 5.1. |
 
 ## License
 
