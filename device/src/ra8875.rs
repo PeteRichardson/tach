@@ -8,13 +8,33 @@
 //!   `0x80 reg` selects a register, `0x00 val` writes it, `0x40 0` reads it.
 //! * The PLL is off at reset. The bus must stay slow (1 MHz) until `init` has set it.
 //!
-//! Double buffering: at 480x272 and 16 bpp the controller holds two layers. Every frame redraws
-//! the plots and number slots, so the frame is drawn on the hidden layer and `present` shows it.
-//! Nothing half-drawn reaches the glass. Static chrome must be drawn on both layers.
+//! Double buffering: at 480x272 and 16 bpp the controller holds two layers. Every operation draws
+//! on layer 2, and `present` copies the frame onto layer 1, which is always on the glass. Nothing
+//! half-drawn reaches the glass.
 
 use crate::ops::{Ink, Op, Panel};
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal::spi::SpiBus;
+
+/// A way to make RA8875 accesses: a prefix byte, then a data byte, with CS low across both.
+pub trait Link {
+    /// One access. It can return before the access is on the wire.
+    fn send(&mut self, prefix: u8, byte: u8);
+    /// One access, and the byte that came back during its data byte.
+    fn exchange(&mut self, prefix: u8, byte: u8) -> u8;
+    /// Wait until every access sent is on the wire.
+    fn flush(&mut self);
+
+    fn write_reg(&mut self, reg: u8, val: u8) {
+        self.send(CMD_WRITE, reg);
+        self.send(DATA_WRITE, val);
+    }
+
+    fn read_reg(&mut self, reg: u8) -> u8 {
+        self.send(CMD_WRITE, reg);
+        self.exchange(DATA_READ, 0)
+    }
+}
 
 pub const WIDTH: u16 = 480;
 pub const HEIGHT: u16 = 272;
@@ -89,68 +109,49 @@ const DCR_LINE: u8 = 0x80;
 const DCR_RECT: u8 = 0x90;
 const DCR_FILL: u8 = 0xB0;
 
-/// The SPI bus and chip select, with the two-byte transaction.
+/// The SPI bus and a GPIO chip select, for `init`: every access waits until it is on the wire.
 pub struct Bus<SPI, CS> {
     spi: SPI,
     cs: CS,
-    /// Bytes clocked since the last `take_bytes`, for the frame budget.
-    bytes: usize,
 }
 
 impl<SPI: SpiBus<u8>, CS: OutputPin> Bus<SPI, CS> {
     /// CS goes high here, so the chip stays deselected from the start.
     pub fn new(spi: SPI, mut cs: CS) -> Self {
         let _ = cs.set_high();
-        Self { spi, cs, bytes: 0 }
+        Self { spi, cs }
     }
 
     /// Give the SPI bus and CS back, to change the bus clock after `init`.
     pub fn free(self) -> (SPI, CS) {
         (self.spi, self.cs)
     }
+}
 
-    fn xfer(&mut self, prefix: u8, byte: u8) -> u8 {
-        let mut buf = [prefix, byte];
-        let _ = self.cs.set_low();
-        let _ = self.spi.transfer_in_place(&mut buf);
-        let _ = self.cs.set_high();
-        self.bytes += 2;
-        buf[1]
-    }
-
+impl<SPI: SpiBus<u8>, CS: OutputPin> Link for Bus<SPI, CS> {
     fn send(&mut self, prefix: u8, byte: u8) {
         let _ = self.cs.set_low();
         let _ = self.spi.write(&[prefix, byte]);
         let _ = self.spi.flush();
         let _ = self.cs.set_high();
-        self.bytes += 2;
     }
 
-    /// One transaction of any length: the prefix, then the bytes.
-    fn send_data(&mut self, bytes: &[u8]) {
+    fn exchange(&mut self, prefix: u8, byte: u8) -> u8 {
+        let mut buf = [prefix, byte];
         let _ = self.cs.set_low();
-        let _ = self.spi.write(bytes);
-        let _ = self.spi.flush();
+        let _ = self.spi.transfer_in_place(&mut buf);
         let _ = self.cs.set_high();
-        self.bytes += bytes.len();
+        buf[1]
     }
 
-    pub fn write_reg(&mut self, reg: u8, val: u8) {
-        self.send(CMD_WRITE, reg);
-        self.send(DATA_WRITE, val);
-    }
-
-    pub fn read_reg(&mut self, reg: u8) -> u8 {
-        self.send(CMD_WRITE, reg);
-        self.xfer(DATA_READ, 0)
-    }
+    fn flush(&mut self) {}
 }
 
 /// Reset the chip, check its ID, and set the PLL, the 480x272 timing and two layers. Run this
 /// with the bus at 1 MHz; the bus can go faster after it returns. `Err` carries the ID that was
 /// read: 0x00 points at MISO or CS, 0xff at power or a floating MISO.
-pub fn init<SPI: SpiBus<u8>, CS: OutputPin, RST: OutputPin>(
-    bus: &mut Bus<SPI, CS>,
+pub fn init<RST: OutputPin>(
+    bus: &mut impl Link,
     rst: &mut RST,
     mut wait_us: impl FnMut(u64),
 ) -> Result<(), u8> {
@@ -214,8 +215,8 @@ pub fn init<SPI: SpiBus<u8>, CS: OutputPin, RST: OutputPin>(
 }
 
 /// The panel. Build it with a bus that `init` has already set up.
-pub struct Ra8875<SPI, CS, W> {
-    bus: Bus<SPI, CS>,
+pub struct Ra8875<L, W> {
+    bus: L,
     /// The WAIT pin: low while the chip is busy and cannot take the next access.
     wait: W,
     /// Last value written to each register, or `None`. Coordinates and colour repeat a lot
@@ -227,13 +228,14 @@ pub struct Ra8875<SPI, CS, W> {
     copy_n: usize,
     /// Bus bytes in the last frame, from one `present` to the next.
     pub last_frame_bytes: usize,
+    bytes: usize,
     /// Operations in the last frame.
     pub last_frame_ops: usize,
     ops: usize,
 }
 
-impl<SPI: SpiBus<u8>, CS: OutputPin, W: InputPin> Ra8875<SPI, CS, W> {
-    pub fn new(bus: Bus<SPI, CS>, wait: W) -> Self {
+impl<L: Link, W: InputPin> Ra8875<L, W> {
+    pub fn new(bus: L, wait: W) -> Self {
         Self {
             bus,
             wait,
@@ -241,13 +243,12 @@ impl<SPI: SpiBus<u8>, CS: OutputPin, W: InputPin> Ra8875<SPI, CS, W> {
             copy: [(0, 0, 0, 0); MAX_COPY],
             copy_n: 0,
             last_frame_bytes: 0,
+            bytes: 0,
             last_frame_ops: 0,
-
             ops: 0,
         }
     }
 
-    /// Write a register only if it does not hold `val` already.
     /// From now on, `present` copies only these windows: the parts of the panel that change from
     /// frame to frame. At most `MAX_COPY`; the rest are dropped.
     pub fn copy_only(&mut self, windows: &[(u16, u16, u16, u16)]) {
@@ -260,12 +261,25 @@ impl<SPI: SpiBus<u8>, CS: OutputPin, W: InputPin> Ra8875<SPI, CS, W> {
     /// is high, STSR showed the drawing engine (bits 7, 6) and the block transfer engine (bit 6)
     /// idle, also at the end of 30,000 glyphs.
     fn ready(&mut self) {
+        // The chip can only be busy with what it has received.
+        self.bus.flush();
         while self.wait.is_low().unwrap_or(false) {}
     }
 
+    fn write_reg(&mut self, reg: u8, val: u8) {
+        self.bus.write_reg(reg, val);
+        self.bytes += 4;
+    }
+
+    fn send(&mut self, prefix: u8, byte: u8) {
+        self.bus.send(prefix, byte);
+        self.bytes += 2;
+    }
+
+    /// Write a register only if it does not hold `val` already.
     fn set(&mut self, reg: u8, val: u8) {
         if self.regs[reg as usize] != Some(val) {
-            self.bus.write_reg(reg, val);
+            self.write_reg(reg, val);
             self.regs[reg as usize] = Some(val);
         }
     }
@@ -305,7 +319,7 @@ impl<SPI: SpiBus<u8>, CS: OutputPin, W: InputPin> Ra8875<SPI, CS, W> {
         self.set_xy(DLHSR0 + 6, y1);
         self.set_color(ink);
         // DCR is a command, not a value: always write it.
-        self.bus.write_reg(DCR, dcr);
+        self.write_reg(DCR, dcr);
         self.ready();
     }
 
@@ -318,12 +332,13 @@ impl<SPI: SpiBus<u8>, CS: OutputPin, W: InputPin> Ra8875<SPI, CS, W> {
             (CURH0 + 2, (y & 0xFF) as u8),
             (CURH0 + 3, (y >> 8) as u8),
         ] {
-            self.bus.write_reg(reg, val);
+            self.write_reg(reg, val);
             self.regs[reg as usize] = None;
         }
         let c = colour(ink);
-        self.bus.send(CMD_WRITE, MRWC);
-        self.bus.send_data(&[DATA_WRITE, (c >> 8) as u8, (c & 0xFF) as u8]);
+        self.send(CMD_WRITE, MRWC);
+        self.send(DATA_WRITE, (c >> 8) as u8);
+        self.send(DATA_WRITE, (c & 0xFF) as u8);
         self.ready();
     }
 
@@ -348,7 +363,7 @@ impl<SPI: SpiBus<u8>, CS: OutputPin, W: InputPin> Ra8875<SPI, CS, W> {
             self.set_xy(BEWR0, width - by);
             self.set_xy(BEHR0, height);
             self.set(BECR1, 0xC2); // ROP "source", move in the positive direction
-            self.bus.write_reg(BECR0, 0x80);
+            self.write_reg(BECR0, 0x80);
             // Not measured: the charts do not shift at present. A glyph's end was (see ready).
             self.ready();
         }
@@ -378,12 +393,12 @@ impl<SPI: SpiBus<u8>, CS: OutputPin, W: InputPin> Ra8875<SPI, CS, W> {
         self.set_xy(BEHR0, h);
         self.set(BECR1, 0x79); // colour expansion with transparency, first pixel in bit 7
         self.set_color(ink);
-        self.bus.write_reg(BECR0, 0x80);
-        self.bus.send(CMD_WRITE, MRWC);
+        self.write_reg(BECR0, 0x80);
+        self.send(CMD_WRITE, MRWC);
         // One byte at a time, each after the engine is ready for it, as RAiO's sample code does. In
         // one burst, a 36-byte name or an 81-byte digit lost bytes; a 12-byte small glyph did not.
         for &byte in glyph.bits {
-            self.bus.send(DATA_WRITE, byte);
+            self.send(DATA_WRITE, byte);
             self.ready();
         }
         self.ready();
@@ -409,7 +424,7 @@ impl<SPI: SpiBus<u8>, CS: OutputPin, W: InputPin> Ra8875<SPI, CS, W> {
     }
 }
 
-impl<SPI: SpiBus<u8>, CS: OutputPin, W: InputPin> Panel for Ra8875<SPI, CS, W> {
+impl<L: Link, W: InputPin> Panel for Ra8875<L, W> {
     fn size(&self) -> (u16, u16) {
         (WIDTH, HEIGHT)
     }
@@ -452,10 +467,10 @@ impl<SPI: SpiBus<u8>, CS: OutputPin, W: InputPin> Panel for Ra8875<SPI, CS, W> {
             self.set_xy(BEWR0, w);
             self.set_xy(BEHR0, h);
             self.set(BECR1, 0xC2); // ROP "source", move in the positive direction
-            self.bus.write_reg(BECR0, 0x80);
+            self.write_reg(BECR0, 0x80);
             self.ready();
         }
-        self.last_frame_bytes = core::mem::take(&mut self.bus.bytes);
+        self.last_frame_bytes = core::mem::take(&mut self.bytes);
         self.last_frame_ops = core::mem::take(&mut self.ops);
     }
 }
