@@ -1,6 +1,6 @@
 # Tach device v2 — RA8875 display, RP2350, smooth motion
 
-Status: **in design**. Replaces the PyPortal path in [`../design.md`](../design.md), which stays
+Status: **running** on the RA8875 panel at 30 fps (2026-11-17). Replaces the PyPortal path in [`../pyportal/design.md`](../pyportal/design.md), which stays
 as the record of v1. Terms: [`../GLOSSARY.md`](../GLOSSARY.md). Decisions:
 [`adr/`](adr/). This file is the working brief for the firmware in [`../device/`](../device/).
 Bring-up status: [`../device/BRINGUP.md`](../device/BRINGUP.md).
@@ -18,8 +18,8 @@ continuous chart travel at about 30 frames per second.
 | --- | --- | --- |
 | Computer | Mac, Apple Silicon | Bus-powered, one cable, no Wi-Fi, no `sudo`. |
 | MCU | Raspberry Pi Pico 2 (RP2350, Cortex-M33) | 520 KB RAM, 4 MB flash, PIO, USB. |
-| Target panel | RA8875 driver board + 4.3" 480×272 IPS, RGB565 | Adafruit 1590 + 1591. **Stock delay: arrives late next week.** |
-| Scaffold panel | 2.7" 400×240 SHARP Memory Display (Adafruit 4694) | Owned. Monochrome, no backlight, black-on-grey. Usable today. |
+| Target panel | RA8875 driver board + 4.3" 480×272 IPS, RGB565 | Adafruit 1590 + 1591. Wiring: [`../device/WIRING.md`](../device/WIRING.md). |
+| Scaffold panel | 2.7" 400×240 SHARP Memory Display (Adafruit 4694) | Used until the RA8875 arrived. Monochrome, no backlight, black-on-grey. `main.rs` no longer drives it. |
 | SWD probe | Existing RPi debug probe + `probe-rs` | Flashing and live RAM inspection without a serial print in the frame loop. |
 
 Panel rule, learned the hard way: the panel must have **frame memory at the controller** or an
@@ -342,5 +342,9 @@ Next:
    reply, GPU from macmon at 10 Hz while the v2 device is connected. A thread serves the v2 device
    beside the v1 push loop, so the PyPortal keeps working. Measured with the scaffold: 0.41 ms
    average round trip, no miss in 20 s.
-8. When the RA8875 kit lands: port the constants to 480×272, write the RA8875 driver, measure the
-   real SPI ceiling.
+8. Done, 2026-11-17: the RA8875 driver (`device/src/ra8875.rs`) on 480×272. SPI writes at
+   18.75 MHz, reads only during init. Each frame is drawn on layer 2 and copied onto layer 1. After
+   init the SPI port drives CS, one 16-bit frame for each access, with a pause between accesses.
+   Chart strokes and joins are merged into the fewest lines, and a number slot is drawn only when
+   it changes: worst draw 22 ms, 29–30 fps. Details: [`../device/WIRING.md`](../device/WIRING.md)
+   and the commit messages.
