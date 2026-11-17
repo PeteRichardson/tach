@@ -2,6 +2,7 @@
 name = "tach-device"
 version = "0.1.0"
 edition = "2021"
+default-run = "tach-device"
 description = "Tach device firmware: RP2350 driving a display panel over SPI, pull-based protocol"
 license = "MIT"
 

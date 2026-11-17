@@ -21,7 +21,7 @@ Source for the pin facts below:
 | **VBUS** (40) | `VIN` | 5 V from USB, inside the board's 3–5 V range. The board makes its own 3.3 V and drives the backlight booster from `VIN`. |
 | **GP18** (24) | `SCK` | SPI0 SCK. Verified valid in `rp235x-hal` 0.4 (`spi/pins.rs`: SPI0 SCK = GP2, GP6, GP18, GP22). |
 | **GP19** (25) | `MOSI` | SPI0 TX. Verified (SPI0 TX = GP3, GP7, GP19, GP23). |
-| **GP16** (21) | `MISO` | SPI0 RX. Verified (SPI0 RX = GP0, GP4, GP16, GP20). The firmware reads status registers and touch data, so this wire is necessary. |
+| **GP16** (21) | `MISO` | SPI0 RX. Verified (SPI0 RX = GP0, GP4, GP16, GP20). The firmware reads only during init, at 1 MHz (see "SPI settings"); touch will need it. |
 | **GP17** (22) | `CS` | Driven as **plain GPIO**. Active **low** on this board. |
 | **GP15** (20) | `RST` | Active low: pull low to reset the RA8875. |
 | **GP14** (19) | `INT` | Goes low when the panel is touched. Optional, but the guide says it improves touch accuracy. |
@@ -68,12 +68,14 @@ compliant.
 
 | Setting | Value | Source |
 | --- | --- | --- |
-| Clock | start at **6 MHz** | Adafruit's CircuitPython driver: *"6 MHz was about the fastest that it would stably run"* |
+| Clock for writes | **18.75 MHz** (150 MHz / 8) | measured 2026-11-17 with the link test in `src/bin/ra8875_bringup.rs`: 0 of 12,000 writes wrong at 6, 12.5, 15 and 18.75 MHz; 3,302 of 12,000 wrong at 25 MHz, and the error rate changed as the board warmed. A failed write is lost completely (the command byte goes astray), so the panel shows random shapes. On 2026-11-16, 25 MHz looked correct by eye, but it had small margin |
+| Clock for reads | **6 MHz or less** | measured 2026-11-16: above about 6 MHz, every byte read back one bit late (`0x1F` as `0x0F`), probably from the delay through the level shifter and the MISO tristate buffer. So the firmware reads only during init, at 1 MHz. A divider change for each read hung the SPI port after some seconds to minutes. Adafruit's CircuitPython driver also says: *"6 MHz was about the fastest that it would stably run"* |
 | Clock during init | slow, until the RA8875 PLL is set | the PLL is not running at reset; the Adafruit Arduino driver uses a slow clock for this phase |
 | Mode | CPOL 0, CPHA 0 (`MODE_0`) | measured 2026-11-16 with `src/bin/ra8875_bringup.rs`: chip ID `0x75` read back in mode 0 at 1 MHz and at 5.77 MHz |
 | CS | low while clocking, high between transactions | active low |
+| WAIT | polled for busy in place of a status read | measured 2026-11-16: once WAIT is high, STSR shows the drawing engine and the block transfer engine idle, also at the end of each glyph transfer |
 
-The real maximum clock with jumper wires is still the open item in `docs/device-v2.md`.
+With these settings, measure the full-frame draw time again (it was 30 ms at 25 MHz).
 
 ## The previous panel (SHARP 2.7")
 
@@ -92,6 +94,8 @@ MSB first.
 - `WAIT` goes low while the drawing engine runs: 1.35 ms for a filled 120×272 rectangle.
 - The backlight follows PWM1 (`P1DCR`), so `LITE` stays unconnected.
 - Red, green, blue and white bars show in the correct order and fill the panel.
+- Link test: random writes at each clock, read back at 5.77 MHz. It prints the wrong writes per
+  clock, then repeats at 25 MHz each second, so you can press a wire and see the count change.
 - `GPIOX` reads back `0x00` after a write of `0x01`, but the panel works. A read of this register
   does not return the value that was written.
 

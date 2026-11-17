@@ -22,10 +22,12 @@ from PIL import ImageFont
 
 HERE = Path(__file__).parent
 
-# (file, pixel size, characters). Digits: Q34, 36 px. Labels: the three row names, and the
-# memory scale limits ("130G").
+# (file, pixel size, characters). Digits: Q34, 36 px. Row names: 24 px, which on the 480x272 panel
+# is as large against the number as v1's scaled built-in font. Small: the memory scale limits
+# ("130G").
 FONTS = [
     ("tach-36.bdf", 36, "0123456789.%G-"),
+    ("tach-24.bdf", 24, "CEGMPU"),
     ("tach-16.bdf", 16, "0123456789.CEGMPU"),
 ]
 
