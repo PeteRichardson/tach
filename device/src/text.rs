@@ -61,6 +61,8 @@ impl Font {
 include!(concat!(env!("OUT_DIR"), "/fonts.rs"));
 
 /// The text of one number, at most "100%" or "97.4G" in use. No allocator, so a fixed buffer.
+/// The bytes after `len` are always zero, so two equal texts compare equal.
+#[derive(Clone, Copy, PartialEq)]
 pub struct Number {
     buf: [u8; 8],
     len: usize,
