@@ -226,6 +226,7 @@ pub fn draw(series: &Fast, row: &Row, now: u64, mut op: impl FnMut(Op)) {
     }
 
     // Newest first, so each bucket can join the one to its right.
+    let mut curve = Curve::new(left, w);
     let now_span = now / BUCKET_MS;
     let mut newer: Option<(u64, i32, i32)> = None; // span, x, y of its newest value
     for back in 0..BUCKETS as u64 {
@@ -235,14 +236,102 @@ pub fn draw(series: &Fast, row: &Row, now: u64, mut op: impl FnMut(Op)) {
         if x < left {
             break;
         }
-        op(Op::Line { x0: x, y0: y_at(b.hi), x1: x, y1: y_at(b.lo), ink: Ink::Line(row.index) });
+        curve.stroke(x, y_at(b.hi), y_at(b.lo));
         let y = y_at(b.last);
         if let Some((n_span, n_x, n_y)) = newer {
             if (n_span - span) * BUCKET_MS <= GAP_MS {
-                op(Op::Line { x0: x, y0: y, x1: n_x, y1: n_y, ink: Ink::Line(row.index) });
+                curve.join(x, y, n_x, n_y);
             }
         }
         newer = Some((span, x, y));
+    }
+    curve.draw(Ink::Line(row.index), &mut op);
+}
+
+/// A curve made of vertical strokes and the lines that join them, kept as the rows it covers in
+/// each plot column and drawn with as few lines as cover the same pixels.
+///
+/// Every part of the curve in a column touches that column's join point, so the rows it covers
+/// there are one unbroken span: one vertical line. Next columns of one pixel each, level or one
+/// row up or down at each step, are one horizontal or diagonal line. Drawn as a stroke and a join
+/// for each bucket, a full chart was about 740 lines on the RA8875, most of them 1 or 2 px.
+struct Curve {
+    left: i32,
+    w: usize,
+    /// Top and bottom row in each column; top > bottom where the column is empty.
+    spans: [(i32, i32); MAX_PLOT_W],
+}
+
+impl Curve {
+    fn new(left: i32, w: u16) -> Self {
+        Self { left, w: (w as usize).min(MAX_PLOT_W), spans: [(i32::MAX, i32::MIN); MAX_PLOT_W] }
+    }
+
+    fn cover(&mut self, x: i32, y: i32) {
+        if let Some(s) = self.spans[..self.w].get_mut((x - self.left) as usize) {
+            *s = (s.0.min(y), s.1.max(y));
+        }
+    }
+
+    fn stroke(&mut self, x: i32, y0: i32, y1: i32) {
+        self.cover(x, y0);
+        self.cover(x, y1);
+    }
+
+    /// The pixels of a line, as Framebuf::line puts them.
+    fn join(&mut self, x0: i32, y0: i32, x1: i32, y1: i32) {
+        let (mut x, mut y) = (x0, y0);
+        let (dx, dy) = ((x1 - x0).abs(), -(y1 - y0).abs());
+        let (sx, sy) = (if x0 < x1 { 1 } else { -1 }, if y0 < y1 { 1 } else { -1 });
+        let mut err = dx + dy;
+        loop {
+            self.cover(x, y);
+            if x == x1 && y == y1 {
+                break;
+            }
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y += sy;
+            }
+        }
+    }
+
+    fn draw(&self, ink: Ink, op: &mut impl FnMut(Op)) {
+        let one = |i: usize| self.spans.get(i).filter(|s| s.0 == s.1).map(|s| s.0);
+        let mut i = 0;
+        while i < self.w {
+            let (top, bottom) = self.spans[i];
+            let x = self.left + i as i32;
+            if top > bottom {
+                i += 1;
+                continue;
+            }
+            if top < bottom {
+                op(Op::Line { x0: x, y0: top, x1: x, y1: bottom, ink });
+                i += 1;
+                continue;
+            }
+            // A run of one-pixel columns with the same step, 0 or 1 row, at each column.
+            let mut end = i;
+            let mut step = None;
+            while end + 1 < self.w {
+                let Some(next) = one(end + 1) else { break };
+                let d = next - self.spans[end].0;
+                if d.abs() > 1 || step.is_some_and(|s| s != d) {
+                    break;
+                }
+                step = Some(d);
+                end += 1;
+            }
+            let (x1, y1) = (self.left + end as i32, self.spans[end].0);
+            op(Op::Line { x0: x, y0: top, x1, y1, ink });
+            i = end + 1;
+        }
     }
 }
 
@@ -368,6 +457,7 @@ pub fn draw_compressed(
     let mut n = 0;
     let now_span = now / BUCKET_MS;
     let mut slot = (now_span % MEM_BUCKETS as u64) as usize;
+    let into_span = (now - now_span * BUCKET_MS) as u32;
     let mut x = 0;
     for back in 0..MEM_BUCKETS as u64 {
         let Some(span) = now_span.checked_sub(back) else { break };
@@ -377,8 +467,10 @@ pub fn draw_compressed(
             continue;
         }
         let t = span * BUCKET_MS + BUCKET_MS / 2;
-        let age = now.saturating_sub(t);
-        while x < axis.w && age >= axis.edges[x + 1] as u64 {
+        // now - t, in 32 bits: the 64-bit product is software on the M33, and this runs 3600
+        // times a frame.
+        let age = (back as u32 * BUCKET_MS as u32 + into_span).saturating_sub(BUCKET_MS as u32 / 2);
+        while x < axis.w && age >= axis.edges[x + 1] {
             x += 1;
         }
         if x == axis.w {
@@ -428,15 +520,17 @@ pub fn draw_compressed(
         fill(r, bottom, row, &mut op);
     }
 
+    let mut curve = Curve::new(left as i32, row.plot().2);
     for (i, c) in cols.iter().enumerate() {
         let x = right - c.x as i32;
-        op(Op::Line { x0: x, y0: y_at(c.hi), x1: x, y1: y_at(c.lo), ink: Ink::Line(row.index) });
+        curve.stroke(x, y_at(c.hi), y_at(c.lo));
         if let Some(n) = i.checked_sub(1).map(|j| cols[j]) {
             if joined(c, &n) {
-                op(Op::Line { x0: x, y0: y_at(c.last), x1: right - n.x as i32, y1: y_at(n.last), ink: Ink::Line(row.index) });
+                curve.join(x, y_at(c.last), right - n.x as i32, y_at(n.last));
             }
         }
     }
+    curve.draw(Ink::Line(row.index), &mut op);
     Some(scale)
 }
 
@@ -470,6 +564,92 @@ mod tests {
         assert!(matches!(out[0], Op::Rect { fill: true, ink: Ink::Background, .. }), "draw starts by clearing");
         out.remove(0);
         out
+    }
+
+    /// The pixels of a line, as the panel draws it: Bresenham, both ends included.
+    fn line_pixels(x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<(i32, i32)> {
+        let mut out = Vec::new();
+        let (mut x, mut y) = (x0, y0);
+        let (dx, dy) = ((x1 - x0).abs(), -(y1 - y0).abs());
+        let (sx, sy) = (if x0 < x1 { 1 } else { -1 }, if y0 < y1 { 1 } else { -1 });
+        let mut err = dx + dy;
+        loop {
+            out.push((x, y));
+            if x == x1 && y == y1 {
+                return out;
+            }
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y += sy;
+            }
+        }
+    }
+
+    /// The curve pixels of `ops` in each column, left to right: (x, top y, bottom y).
+    fn columns(ops: &[Op]) -> Vec<(i32, i32, i32)> {
+        let mut px: Vec<(i32, i32)> = ops
+            .iter()
+            .filter_map(|op| match *op {
+                Op::Line { x0, y0, x1, y1, ink: Ink::Line(_) } => Some(line_pixels(x0, y0, x1, y1)),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        px.sort();
+        let mut out: Vec<(i32, i32, i32)> = Vec::new();
+        for (x, y) in px {
+            match out.last_mut() {
+                Some(c) if c.0 == x => c.2 = y,
+                _ => out.push((x, y, y)),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_merged_curve_lights_the_same_pixels_as_its_strokes_and_joins() {
+        let (left, w) = (10, 60);
+        let mut seed = 7u32;
+        let mut rand = |n: i32| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (seed >> 16) as i32 % n
+        };
+        for _ in 0..200 {
+            let mut curve = Curve::new(left, w);
+            let mut want = Vec::new();
+            let mut newer: Option<(i32, i32)> = None;
+            let mut x = left + w as i32 - 1;
+            while x >= left {
+                let y = 20 + rand(5) - 2 + newer.map_or(0, |n| n.1 - 20);
+                let (hi, lo) = (y - rand(2), y + rand(2));
+                curve.stroke(x, hi, lo);
+                want.extend(line_pixels(x, hi, x, lo));
+                if let Some((n_x, n_y)) = newer.filter(|_| rand(8) != 0) {
+                    curve.join(x, y, n_x, n_y);
+                    want.extend(line_pixels(x, y, n_x, n_y));
+                }
+                newer = Some((x, y));
+                x -= 1 + rand(3);
+            }
+            let mut ops = Vec::new();
+            curve.draw(Ink::Line(0), &mut |op| ops.push(op));
+            want.sort();
+            want.dedup();
+            let mut got: Vec<_> = columns(&ops).iter().flat_map(|&(x, t, b)| (t..=b).map(move |y| (x, y))).collect();
+            got.sort();
+            assert_eq!(got, want);
+            // Each drawn pixel once: no line overlaps another.
+            let drawn: usize = ops.iter().map(|op| match *op {
+                Op::Line { x0, y0, x1, y1, .. } => line_pixels(x0, y0, x1, y1).len(),
+                _ => 0,
+            }).sum();
+            assert_eq!(drawn, want.len());
+        }
     }
 
     /// Lines that are not vertical: the joins between buckets.
@@ -550,17 +730,11 @@ mod tests {
         let now = 100_000;
         s.add(now - 1000 - BUCKET_MS / 2, 50.0, 50.0, 50.0); // one second older
         s.add(now - BUCKET_MS / 2, 50.0, 50.0, 50.0); // centre of the newest span
-        let strokes: Vec<i32> = ops(&s, now)
-            .iter()
-            .filter_map(|op| match *op {
-                Op::Line { x0, x1, y0, .. } if x0 == x1 && y0 != row().plot().1 as i32 => Some(x0),
-                _ => None,
-            })
-            .collect();
-        // 12 px per second, within the rounding of a span to its centre.
-        assert_eq!(strokes.len(), 2);
-        assert!((strokes[0] - right).abs() <= 1, "{strokes:?}");
-        assert!((strokes[1] - (right - 12)).abs() <= 1, "{strokes:?}");
+        let xs: Vec<i32> = columns(&ops(&s, now)).iter().map(|c| c.0).collect();
+        // 12 px per second, within the rounding of a span to its centre, joined by a level line.
+        assert!((xs[xs.len() - 1] - right).abs() <= 1, "{xs:?}");
+        assert!((xs[0] - (right - 12)).abs() <= 1, "{xs:?}");
+        assert!(xs.windows(2).all(|p| p[1] == p[0] + 1), "{xs:?}");
     }
 
     #[test]
@@ -665,19 +839,13 @@ mod tests {
         layout::rows(400, 240)[MEM]
     }
 
-    /// The x of each stroke (vertical line below the marks) `draw_compressed` issues.
+    /// The curve pixels `draw_compressed` lights in each column: (x, top y, bottom y).
     fn mem_strokes(series: &Slow, now: u64) -> Vec<(i32, i32, i32)> {
         let row = mem_row();
         let axis = Axis::new(row.plot().2);
         let mut out = Vec::new();
-        draw_compressed(series, &row, &axis, now, |op| {
-            if let Op::Line { x0, y0, x1, y1, .. } = op {
-                if x0 == x1 && !(y0 == row.plot().1 as i32 && y1 == y0 + 4) {
-                    out.push((x0, y0.min(y1), y0.max(y1)));
-                }
-            }
-        });
-        out
+        draw_compressed(series, &row, &axis, now, |op| out.push(op));
+        columns(&out)
     }
 
     #[test]
@@ -705,9 +873,8 @@ mod tests {
         s.add(now - 1000 - BUCKET_MS / 2, 50.0, 50.0, 50.0);
         s.add(now - BUCKET_MS / 2, 50.0, 50.0, 50.0);
         let xs: Vec<i32> = mem_strokes(&s, now).iter().map(|s| s.0).collect();
-        assert_eq!(xs.len(), 2);
-        assert!((xs[0] - right).abs() <= 1, "{xs:?}");
-        assert!((xs[1] - (right - 12)).abs() <= 1, "{xs:?}");
+        assert!((xs[xs.len() - 1] - right).abs() <= 1, "{xs:?}");
+        assert!((xs[0] - (right - 12)).abs() <= 1, "{xs:?}");
     }
 
     #[test]

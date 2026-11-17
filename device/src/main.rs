@@ -151,12 +151,6 @@ fn main() -> ! {
     // only the plots and number slots.
     draw_chrome(&mut panel, &rows);
     panel.present();
-    let mut windows = [(0, 0, 0, 0); 2 * layout::ROWS];
-    for (pair, row) in windows.chunks_mut(2).zip(rows.iter()) {
-        pair[0] = row.plot();
-        pair[1] = row.slot();
-    }
-    panel.copy_only(&windows);
 
     // --- frame loop ----------------------------------------------------------
     // Static chrome once, then per-frame work only. This is the shape the firmware keeps on the
@@ -190,6 +184,9 @@ fn main() -> ! {
     // The CPU and GPU numbers on the glass, held between refreshes.
     let mut fast_numbers: [Option<text::Number>; 2] = [None, None];
     let mut next_number_us: u64 = 0;
+    // What each number slot shows on layer 2: its number, ink and memory scale. A slot is drawn
+    // and copied only when this changes. Text was about 4 ms of each frame.
+    let mut shown: [Option<(text::Number, Ink, Option<chart::Scale>)>; layout::ROWS] = [None; layout::ROWS];
 
     loop {
         let t0 = timer.get_counter().ticks();
@@ -209,6 +206,8 @@ fn main() -> ! {
         let numbers = [cpu_number, gpu_number, &model.mem.newest().map(text::Number::gb)];
         let now = chart::mac_now(mac_offset_ms, last_reply_us, t0);
         let mut stale = [true; layout::ROWS];
+        let mut windows = [(0, 0, 0, 0); 2 * layout::ROWS];
+        let mut copy_n = 0;
         for (i, (row, stale)) in rows.iter().zip(stale.iter_mut()).enumerate() {
             // The memory scale, for its limit labels: None until there is memory to zoom to.
             let mut scale = None;
@@ -231,6 +230,15 @@ fn main() -> ! {
                 Some(n) if !*stale => (n, Ink::Line(row.index)),
                 _ => (&text::Number::dashes(), Ink::Dim),
             };
+            windows[copy_n] = row.plot();
+            copy_n += 1;
+            let slot = Some((*number, ink, scale));
+            if shown[i] == slot {
+                continue;
+            }
+            shown[i] = slot;
+            windows[copy_n] = row.slot();
+            copy_n += 1;
             if i == chart::MEM {
                 let limits = scale.map(|s| (text::Number::gb(s.lo), text::Number::gb(s.hi)));
                 text::draw_mem_slot(row, LABELS[i], number, limits, ink, |op| panel.apply(op));
@@ -240,6 +248,7 @@ fn main() -> ! {
         }
 
         let t1 = timer.get_counter().ticks();
+        panel.copy_only(&windows[..copy_n]);
         panel.present();
         let t2 = timer.get_counter().ticks();
 
