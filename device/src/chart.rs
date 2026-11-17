@@ -13,13 +13,15 @@
 //! the screen, and further left each column covers more time.
 
 use crate::layout::{Row, GRID_TICK_S, TRAVEL_PX_PER_S};
-use crate::ops::Op;
+use crate::ops::{Ink, Op};
 use crate::wire::Reply;
 
-/// Travel, in pixels per millisecond of Mac time.
-const PX_PER_MS: f32 = TRAVEL_PX_PER_S / 1000.0;
 /// One bucket is one pixel of travel: 83 ms at 12 px/s.
 pub const BUCKET_MS: u64 = (1000.0 / TRAVEL_PX_PER_S) as u64;
+/// Travel, in pixels per millisecond of Mac time: exactly one pixel per bucket, so 12.05 px/s.
+/// With `TRAVEL_PX_PER_S / 1000` the buckets were 0.996 px apart, each one stepped to its next
+/// pixel 0.33 ms before the bucket to its right, and the steps rippled across the plot.
+const PX_PER_MS: f32 = 1.0 / BUCKET_MS as f32;
 /// Buckets kept per row. More than the widest plot (378 px on the 480 px panel), so the curve
 /// reaches the left edge.
 pub const BUCKETS: usize = 400;
@@ -195,7 +197,7 @@ pub fn mac_now(offset_ms: Option<i64>, last_reply_us: Option<u64>, now_us: u64) 
 /// Clear the plot area of `row`: what a row shows when the link is stale.
 pub fn blank(row: &Row, mut op: impl FnMut(Op)) {
     let (left, top, w, h) = row.plot();
-    op(Op::Rect { x: left as i32, y: top as i32, w, h, fill: true, t: 0, on: false });
+    op(Op::Rect { x: left as i32, y: top as i32, w, h, fill: true, t: 0, ink: Ink::Background });
 }
 
 /// Draw `series` into the plot area of `row` as it stands at Mac time `now`: the plot is cleared,
@@ -218,7 +220,7 @@ pub fn draw(series: &Fast, row: &Row, now: u64, mut op: impl FnMut(Op)) {
         if x < left {
             break;
         }
-        op(Op::Line { x0: x, y0: top as i32, x1: x, y1: top as i32 + 4, on: true });
+        op(Op::Line { x0: x, y0: top as i32, x1: x, y1: top as i32 + 4, ink: Ink::Grid(row.index) });
         let Some(earlier) = tick.checked_sub(tick_ms) else { break };
         tick = earlier;
     }
@@ -233,11 +235,11 @@ pub fn draw(series: &Fast, row: &Row, now: u64, mut op: impl FnMut(Op)) {
         if x < left {
             break;
         }
-        op(Op::Line { x0: x, y0: y_at(b.hi), x1: x, y1: y_at(b.lo), on: true });
+        op(Op::Line { x0: x, y0: y_at(b.hi), x1: x, y1: y_at(b.lo), ink: Ink::Line(row.index) });
         let y = y_at(b.last);
         if let Some((n_span, n_x, n_y)) = newer {
             if (n_span - span) * BUCKET_MS <= GAP_MS {
-                op(Op::Line { x0: x, y0: y, x1: n_x, y1: n_y, on: true });
+                op(Op::Line { x0: x, y0: y, x1: n_x, y1: n_y, ink: Ink::Line(row.index) });
             }
         }
         newer = Some((span, x, y));
@@ -354,7 +356,7 @@ pub fn draw_compressed(
     for age in MEM_MARKS_MS {
         if let Some(x) = axis.column(age) {
             let x = right - x as i32;
-            op(Op::Line { x0: x, y0: top as i32, x1: x, y1: top as i32 + 4, on: true });
+            op(Op::Line { x0: x, y0: top as i32, x1: x, y1: top as i32 + 4, ink: Ink::Grid(row.index) });
         }
     }
 
@@ -400,16 +402,56 @@ pub fn draw_compressed(
     let scale = Scale::nice(lo, hi);
     let y_at = |v: f32| scale.y(row, v);
 
+    // The area under the curve first, so the strokes go on top of it. Next columns with one top
+    // share one rectangle: the memory curve is mostly flat, and each rectangle is one engine run.
+    let bottom = (top + row.plot().3) as i32;
+    // A column joined to the next newer one shades up to it, so the columns with no bucket under
+    // a join line are not left dark.
+    let mut run: Option<(i32, i32, i32)> = None; // left x, right x, top y
+    for (i, c) in cols.iter().enumerate().rev() {
+        let (x, y) = (right - c.x as i32, y_at(c.lo) + 1);
+        let end = match i.checked_sub(1).map(|j| cols[j]) {
+            Some(n) if joined(c, &n) => right - n.x as i32 - 1,
+            _ => x,
+        };
+        run = match run {
+            Some((l, r, ry)) if ry == y && x == r + 1 => Some((l, end, y)),
+            _ => {
+                if let Some(r) = run {
+                    fill(r, bottom, row, &mut op);
+                }
+                Some((x, end, y))
+            }
+        };
+    }
+    if let Some(r) = run {
+        fill(r, bottom, row, &mut op);
+    }
+
     for (i, c) in cols.iter().enumerate() {
         let x = right - c.x as i32;
-        op(Op::Line { x0: x, y0: y_at(c.hi), x1: x, y1: y_at(c.lo), on: true });
+        op(Op::Line { x0: x, y0: y_at(c.hi), x1: x, y1: y_at(c.lo), ink: Ink::Line(row.index) });
         if let Some(n) = i.checked_sub(1).map(|j| cols[j]) {
-            if c.x - n.x == 1 || n.oldest_t - c.newest_t <= GAP_MS {
-                op(Op::Line { x0: x, y0: y_at(c.last), x1: right - n.x as i32, y1: y_at(n.last), on: true });
+            if joined(c, &n) {
+                op(Op::Line { x0: x, y0: y_at(c.last), x1: right - n.x as i32, y1: y_at(n.last), ink: Ink::Line(row.index) });
             }
         }
     }
     Some(scale)
+}
+
+/// True if column `c` and the next newer column `n` are one stretch of curve: next to each other,
+/// or with no more than `GAP_MS` between their data.
+fn joined(c: &Column, n: &Column) -> bool {
+    c.x - n.x == 1 || n.oldest_t - c.newest_t <= GAP_MS
+}
+
+/// One run of the shaded area: columns `l` to `r`, from row `y` down to `bottom` (exclusive).
+fn fill((l, r, y): (i32, i32, i32), bottom: i32, row: &Row, op: &mut impl FnMut(Op)) {
+    if y < bottom {
+        let (w, h) = ((r - l + 1) as u16, (bottom - y) as u16);
+        op(Op::Rect { x: l, y, w, h, fill: true, t: 0, ink: Ink::Fill(row.index) });
+    }
 }
 
 #[cfg(test)]
@@ -425,7 +467,7 @@ mod tests {
     fn ops(series: &Fast, now: u64) -> Vec<Op> {
         let mut out = Vec::new();
         draw(series, &row(), now, |op| out.push(op));
-        assert!(matches!(out[0], Op::Rect { fill: true, on: false, .. }), "draw starts by clearing");
+        assert!(matches!(out[0], Op::Rect { fill: true, ink: Ink::Background, .. }), "draw starts by clearing");
         out.remove(0);
         out
     }
@@ -557,7 +599,9 @@ mod tests {
         let s = Fast::new();
         let (left, _, w, _) = row().plot();
         let right = (left + w - 1) as i32;
-        let now = 12_500; // ticks at 10 s, 5 s and 0 s: 2.5, 7.5 and 12.5 s ago
+        // Ticks at 10 s, 5 s and 0 s: 2.5, 7.5 and 12.5 s ago, at 83 ms per pixel 30.1, 90.4 and
+        // 150.6 px.
+        let now = 12_500;
         let ticks: Vec<i32> = ops(&s, now)
             .iter()
             .map(|op| match *op {
@@ -565,7 +609,7 @@ mod tests {
                 _ => panic!(),
             })
             .collect();
-        assert_eq!(ticks, vec![right - 30, right - 90, right - 150]);
+        assert_eq!(ticks, vec![right - 30, right - 90, right - 151]);
     }
 
     #[test]

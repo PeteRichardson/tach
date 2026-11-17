@@ -2,8 +2,8 @@
 //! the Mac. Each frame redraws the curves from the chart model at Mac time, then pulls one reply
 //! from tach-sender.py and reads it into the model (ADR-0002, ADR-0006).
 //!
-//! Wiring: device/WIRING.md. Pins: SPI0 SCK GP18, MOSI GP19, CS GP17 (GPIO, active high),
-//! DISP GP16 (GPIO). GP20/GP21 stay free for SWD.
+//! Wiring: device/WIRING.md. Pins: SPI0 SCK GP18, MOSI GP19, MISO GP16, CS GP17 (GPIO, active
+//! low), RST GP15. GP20/GP21 stay free for SWD.
 
 #![no_std]
 #![no_main]
@@ -12,7 +12,7 @@ use panic_halt as _;
 
 use core::fmt::Write as _;
 
-use embedded_hal::spi::MODE_1;
+use embedded_hal::spi::MODE_0;
 use fugit::RateExtU32;
 use rp235x_hal::{
     self as hal,
@@ -26,31 +26,37 @@ use rp235x_hal::{
 
 mod chart;
 mod fifo_spi;
-mod framebuf;
 mod layout;
 mod link;
 mod ops;
-mod sharp;
+mod ra8875;
 mod text;
 mod wire;
 
 use fifo_spi::FifoSpi;
-use ops::{Op, Panel};
+use ops::{Ink, Op, Panel};
 
 #[cfg(feature = "rtt")]
 use rtt_target::rprintln;
-use sharp::Sharp;
+use ra8875::Ra8875;
 
 /// Board crystal on a Pico 2.
 const XOSC_HZ: u32 = 12_000_000;
-/// SPI clock request. From a 150 MHz clk_peri the divider gives 10.71 MHz for this, and the next
-/// step up is 12.5 MHz. Measured on the glass: 10.71 MHz works, 12.5 MHz leaves the panel blank.
-/// See device/BRINGUP.md.
-const SPI_HZ: u32 = 12_000_000;
+/// SPI clock until the RA8875 PLL runs. It is off at reset, so the bus must be slow.
+const SPI_INIT_HZ: u32 = 1_000_000;
+/// SPI clock after init: 150 MHz / 8. At the next step up, 25 MHz, 28% of writes did not arrive
+/// (measured 2026-11-17 with the bring-up link test, 0 errors at this clock). Reads do not work
+/// above about 6 MHz: every byte reads back one bit late (measured 2026-11-16). So after init the
+/// driver reads nothing and waits on the WAIT pin.
+const SPI_HZ: u32 = 18_750_000;
 /// Row labels, in the order of chart::CPU, GPU, MEM.
 const LABELS: [&[u8]; layout::ROWS] = [b"CPU", b"GPU", b"MEM"];
 /// Target frames per second.
 const FPS: u32 = 30;
+/// The least time to wait for a reply after a pull, also when the frame has run past its
+/// deadline. Replies took at most 1.6 ms in the logs. Without this, a frame longer than 1 / FPS
+/// gave up on its reply at once, and the curves had gaps (seen 2026-11-17).
+const REPLY_WAIT_US: u64 = 5_000;
 /// The CPU and GPU numbers show the mean of this much history. One sample alone jumps by 10 to 15
 /// points from one frame to the next, which is too fast to read.
 const NUMBER_MEAN_MS: u64 = 1000;
@@ -101,45 +107,55 @@ fn main() -> ! {
     let sio = Sio::new(pac.SIO);
     let pins = Pins::new(pac.IO_BANK0, pac.PADS_BANK0, sio.gpio_bank0, &mut resets);
 
-    // SPI0: GP18 SCK, GP19 MOSI. No MISO — the panel takes data only. The HAL pin tuple for a
-    // two-wire set is (Tx, Sck); see rp235x_hal::spi::pins.
+    // CS before the SPI pins, so the chip stays deselected. The 10k pull-up holds it until here.
+    let cs = pins.gpio17.into_push_pull_output();
+    let mut rst = pins.gpio15.into_push_pull_output();
+    let wait = pins.gpio13.into_pull_up_input();
     let sck = pins.gpio18.into_function::<FunctionSpi>();
     let mosi = pins.gpio19.into_function::<FunctionSpi>();
-    let mut spi = Spi::<_, _, _, 8>::new(pac.SPI0, (mosi, sck)).init(
+    let miso = pins.gpio16.into_function::<FunctionSpi>();
+    let spi = Spi::<_, _, _, 8>::new(pac.SPI0, (mosi, miso, sck)).init(
         &mut resets,
         clocks.peripheral_clock.freq(),
-        SPI_HZ.Hz(),
-        MODE_1,
+        SPI_INIT_HZ.Hz(),
+        MODE_0,
     );
-
-    // CS is active high, so it is driven as plain GPIO rather than by the SPI peripheral.
-    let cs = pins.gpio17.into_push_pull_output();
-    let disp = pins.gpio16.into_push_pull_output();
 
     let timer = hal::timer::Timer::new_timer0(pac.TIMER0, &mut resets, &clocks);
 
-    // USB first, so the host can enumerate the port while the self-test runs.
+    // USB first, so the host can enumerate the port while the panel comes up.
     link::init(pac.USB, pac.USB_DPRAM, clocks.usb_clock, &mut resets);
 
-    // The divider cannot make every rate, so log the one the bus really runs at: 10.71 MHz for a
-    // 12 MHz request. Setting it again writes the same divider.
+    let mut bus = ra8875::Bus::new(spi, cs);
+    if let Err(id) = ra8875::init(&mut bus, &mut rst, |us| wait_us(&timer, us)) {
+        rprintln!("RA8875 not found: ID {:#04x}, want {:#04x}. See device/WIRING.md.", id, ra8875::CHIP_ID);
+        hal::halt()
+    }
+
+    // The PLL runs now, so the bus can go to full speed. The divider cannot make every rate, so
+    // log the one the bus really runs at.
+    let (mut spi, cs) = bus.free();
     let spi_hz = spi.set_baudrate(clocks.peripheral_clock.freq(), SPI_HZ.Hz()).to_Hz();
 
     // The HAL's own write waits after every byte; this bus keeps the FIFO full. See fifo_spi.rs.
-    let mut panel = Sharp::new(FifoSpi::new(spi), cs, disp);
-
-    panel.enable();
-    // The driver needs a moment after DISP goes high before it accepts pixels.
-    wait_us(&timer, 20_000);
+    let mut panel = Ra8875::new(ra8875::Bus::new(FifoSpi::new(spi), cs), wait);
 
     let (w, h) = panel.size();
-    rprintln!("tach scaffold up: {}x{} @ {} Hz SPI ({} Hz requested)", w, h, spi_hz, SPI_HZ);
+    rprintln!("tach up: RA8875 {}x{} @ {} Hz SPI ({} Hz requested)", w, h, spi_hz, SPI_HZ);
 
     selftest(&mut panel, &timer);
 
     let rows = layout::rows(w, h);
+    // The frame loop never redraws the chrome: present it once with the whole panel, then copy
+    // only the plots and number slots.
     draw_chrome(&mut panel, &rows);
     panel.present();
+    let mut windows = [(0, 0, 0, 0); 2 * layout::ROWS];
+    for (pair, row) in windows.chunks_mut(2).zip(rows.iter()) {
+        pair[0] = row.plot();
+        pair[1] = row.slot();
+    }
+    panel.copy_only(&windows);
 
     // --- frame loop ----------------------------------------------------------
     // Static chrome once, then per-frame work only. This is the shape the firmware keeps on the
@@ -155,7 +171,8 @@ fn main() -> ! {
     let mut frames: u32 = 0;
     let mut draw_us_max: u64 = 0;
     let mut present_us_max: u64 = 0;
-    let mut present_bytes_at_max: usize = 0;
+    let mut bytes_max: usize = 0;
+    let mut ops_max: usize = 0;
     let mut bytes_total: usize = 0;
     let mut window_start: u64 = timer.get_counter().ticks();
 
@@ -209,15 +226,15 @@ fn main() -> ! {
                 }
                 None => chart::blank(row, |op| panel.apply(op)),
             }
-            let number = match &numbers[i] {
-                Some(n) if !*stale => n,
-                _ => &text::Number::dashes(),
+            let (number, ink) = match &numbers[i] {
+                Some(n) if !*stale => (n, Ink::Line(row.index)),
+                _ => (&text::Number::dashes(), Ink::Dim),
             };
             if i == chart::MEM {
                 let limits = scale.map(|s| (text::Number::gb(s.lo), text::Number::gb(s.hi)));
-                text::draw_mem_slot(row, LABELS[i], number, limits, |op| panel.apply(op));
+                text::draw_mem_slot(row, LABELS[i], number, limits, ink, |op| panel.apply(op));
             } else {
-                text::draw_slot(row, LABELS[i], number, |op| panel.apply(op));
+                text::draw_slot(row, LABELS[i], number, ink, |op| panel.apply(op));
             }
         }
 
@@ -232,7 +249,7 @@ fn main() -> ! {
         let mut tag = LineBuf::new();
         let _ = write!(tag, "\"pull\":{}", pull_seq);
         if link::send(req.as_bytes()) {
-            let deadline = t0 + frame_us;
+            let deadline = (t0 + frame_us).max(t2 + REPLY_WAIT_US);
             loop {
                 let now = timer.get_counter().ticks();
                 if let Some(n) = link::take_line(&mut reply) {
@@ -265,11 +282,10 @@ fn main() -> ! {
         }
 
         draw_us_max = draw_us_max.max(t1 - t0);
-        if t2 - t1 > present_us_max {
-            present_us_max = t2 - t1;
-            present_bytes_at_max = panel.last_flush_bytes;
-        }
-        bytes_total += panel.last_flush_bytes;
+        present_us_max = present_us_max.max(t2 - t1);
+        bytes_max = bytes_max.max(panel.last_frame_bytes);
+        ops_max = ops_max.max(panel.last_frame_ops);
+        bytes_total += panel.last_frame_bytes;
         frames += 1;
 
         // One line a second: achieved rate, worst-case draw and present, and pixel traffic. This is
@@ -277,12 +293,12 @@ fn main() -> ! {
         let span = t2 - window_start;
         if span >= TICKS_PER_S {
             rprintln!(
-                "fps {}  draw_us {}  present_us {} ({} B)  rows {}  KB/s {}  rtt_us avg {} max {}  ok {} miss {} unsent {} unread {}  cpu {:?} gpu {:?} mem {:?}  stale {:?}",
+                "fps {}  draw_us {}  present_us {}  bus B max {}  ops max {}  KB/s {}  rtt_us avg {} max {}  ok {} miss {} unsent {} unread {}  cpu {:?} gpu {:?} mem {:?}  stale {:?}",
                 frames as u64 * TICKS_PER_S / span,
                 draw_us_max,
                 present_us_max,
-                present_bytes_at_max,
-                panel.last_flush_rows,
+                bytes_max,
+                ops_max,
                 bytes_total as u64 * TICKS_PER_S / span / 1024,
                 rtt_us_sum / (replies.max(1) as u64),
                 rtt_us_max,
@@ -299,7 +315,8 @@ fn main() -> ! {
             frames = 0;
             draw_us_max = 0;
             present_us_max = 0;
-            present_bytes_at_max = 0;
+            bytes_max = 0;
+            ops_max = 0;
             bytes_total = 0;
             rtt_us_max = 0;
             rtt_us_sum = 0;
@@ -364,35 +381,35 @@ fn answers(line: &[u8], tag: &[u8]) -> bool {
 fn selftest<P: Panel>(panel: &mut P, timer: &hal::timer::Timer<hal::timer::CopyableTimer0>) {
     let (w, h) = panel.size();
 
-    panel.apply(Op::Clear { on: true });
+    panel.apply(Op::Clear { ink: Ink::Dim });
     panel.present();
     wait_us(timer, 500_000);
 
-    panel.apply(Op::Clear { on: false });
-    panel.apply(Op::Line { x0: 0, y0: 0, x1: 0, y1: h as i32 - 1, on: true });
+    panel.apply(Op::Clear { ink: Ink::Background });
+    panel.apply(Op::Line { x0: 0, y0: 0, x1: 0, y1: h as i32 - 1, ink: Ink::Dim });
     panel.present();
     wait_us(timer, 500_000);
 
-    panel.apply(Op::Clear { on: false });
-    panel.apply(Op::Line { x0: 0, y0: 0, x1: w as i32 - 1, y1: 0, on: true });
+    panel.apply(Op::Clear { ink: Ink::Background });
+    panel.apply(Op::Line { x0: 0, y0: 0, x1: w as i32 - 1, y1: 0, ink: Ink::Dim });
     panel.present();
     wait_us(timer, 500_000);
 
-    panel.apply(Op::Clear { on: false });
-    panel.apply(Op::Rect { x: 0, y: 0, w: w / 2, h, fill: true, t: 0, on: true });
+    panel.apply(Op::Clear { ink: Ink::Background });
+    panel.apply(Op::Rect { x: 0, y: 0, w: w / 2, h, fill: true, t: 0, ink: Ink::Dim });
     panel.present();
     wait_us(timer, 500_000);
 
-    panel.apply(Op::Clear { on: false });
-    panel.apply(Op::Rect { x: 0, y: 0, w: w - 1, h: h - 1, fill: false, t: 1, on: true });
+    panel.apply(Op::Clear { ink: Ink::Background });
+    panel.apply(Op::Rect { x: 0, y: 0, w: w - 1, h: h - 1, fill: false, t: 1, ink: Ink::Dim });
     let mut x: u16 = 0;
     while x < w {
-        panel.apply(Op::Line { x0: x as i32, y0: 0, x1: x as i32, y1: h as i32 - 1, on: true });
+        panel.apply(Op::Line { x0: x as i32, y0: 0, x1: x as i32, y1: h as i32 - 1, ink: Ink::Dim });
         x += 50;
     }
     let mut y: u16 = 0;
     while y < h {
-        panel.apply(Op::Line { x0: 0, y0: y as i32, x1: w as i32 - 1, y1: y as i32, on: true });
+        panel.apply(Op::Line { x0: 0, y0: y as i32, x1: w as i32 - 1, y1: y as i32, ink: Ink::Dim });
         y += 40;
     }
     panel.present();
@@ -403,8 +420,8 @@ fn selftest<P: Panel>(panel: &mut P, timer: &hal::timer::Timer<hal::timer::Copya
 /// `text::draw_slot`.
 fn draw_chrome<P: Panel>(panel: &mut P, rows: &[layout::Row; layout::ROWS]) {
     let (w, h) = panel.size();
-    panel.apply(Op::Clear { on: false });
-    panel.apply(Op::Rect { x: 0, y: 0, w: w - 1, h: h - 1, fill: false, t: 1, on: true });
+    panel.apply(Op::Clear { ink: Ink::Background });
+    panel.apply(Op::Rect { x: 0, y: 0, w: w - 1, h: h - 1, fill: false, t: 1, ink: Ink::Dim });
     for r in rows {
         panel.apply(Op::Rect {
             x: r.chart_x as i32,
@@ -413,7 +430,7 @@ fn draw_chrome<P: Panel>(panel: &mut P, rows: &[layout::Row; layout::ROWS]) {
             h: r.chart_h,
             fill: false,
             t: 1,
-            on: true,
+            ink: Ink::Grid(r.index),
         });
     }
 }

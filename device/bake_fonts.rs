@@ -6,7 +6,8 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 /// (static name, BDF file in fonts/).
-const FONTS: [(&str, &str); 2] = [("DIGITS", "tach-36.bdf"), ("LABELS", "tach-16.bdf")];
+const FONTS: [(&str, &str); 3] =
+    [("DIGITS", "tach-36.bdf"), ("NAMES", "tach-24.bdf"), ("LABELS", "tach-16.bdf")];
 
 /// Write `$OUT_DIR/fonts.rs` from the BDF files in `fonts_dir`.
 fn bake_fonts(fonts_dir: &Path) {

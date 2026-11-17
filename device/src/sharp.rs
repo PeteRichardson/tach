@@ -125,20 +125,20 @@ where
 
     fn apply(&mut self, op: Op) {
         match op {
-            Op::Clear { on } => self.fb.fill(on),
-            Op::Pix { x, y, on } => self.fb.set(x, y, on),
-            Op::Line { x0, y0, x1, y1, on } => self.fb.line(x0, y0, x1, y1, on),
-            Op::Rect { x, y, w, h, fill, t, on } => {
+            Op::Clear { ink } => self.fb.fill(ink.on()),
+            Op::Pix { x, y, ink } => self.fb.set(x, y, ink.on()),
+            Op::Line { x0, y0, x1, y1, ink } => self.fb.line(x0, y0, x1, y1, ink.on()),
+            Op::Rect { x, y, w, h, fill, t, ink } => {
                 if fill {
-                    self.fb.fill_rect(x, y, w, h, on);
+                    self.fb.fill_rect(x, y, w, h, ink.on());
                 } else {
-                    self.fb.outline(x, y, w, h, t, on);
+                    self.fb.outline(x, y, w, h, t, ink.on());
                 }
             }
             Op::ShiftBand { left, top, width, height, by } => {
                 self.fb.shift_band_left(left, top, width, height, by)
             }
-            Op::Glyph { x, y, glyph, on } => self.fb.glyph(x, y, glyph, on),
+            Op::Glyph { x, y, glyph, ink } => self.fb.glyph(x, y, glyph, ink.on()),
             // No backlight on this panel. Kept in the trait so the caller does not need to know.
             Op::Brightness { .. } => {}
         }

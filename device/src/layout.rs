@@ -28,6 +28,8 @@ pub struct Row {
     pub chart_y: u16,
     /// Height of the chart.
     pub chart_h: u16,
+    /// Position from the top, 0 to `ROWS - 1`. It picks the row's colour.
+    pub index: u8,
     /// Panel width this row was computed for, kept so a wrong panel size is visible in a dump.
     pub panel_w: u16,
 }
@@ -51,7 +53,13 @@ impl Row {
         (self.slot_x, self.chart_y, self.chart_x - MARGIN_PX - self.slot_x, self.chart_h)
     }
 
-    /// Baseline of the row label: its capitals (12 px at 16 px) sit level with the chart's top.
+    /// Baseline of the row name: its capitals (18 px at 24 px) sit level with the chart's top.
+    pub fn name_baseline(&self) -> u16 {
+        self.chart_y + 18
+    }
+
+    /// Baseline of a small label, such as the top memory limit: its capitals (12 px at 16 px) sit
+    /// level with the chart's top.
     pub fn label_baseline(&self) -> u16 {
         self.chart_y + 12
     }
@@ -80,6 +88,7 @@ pub fn rows(panel_w: u16, panel_h: u16) -> [Row; ROWS] {
     let chart_right = panel_w - MARGIN_PX;
     let chart_h = row_h - AXIS_PX - MARGIN_PX * 2;
     [0, 1, 2].map(|i| Row {
+        index: i as u8,
         slot_x: MARGIN_PX,
         chart_x,
         chart_right,

@@ -7,7 +7,7 @@
 use core::fmt::Write as _;
 
 use crate::layout::Row;
-use crate::ops::Op;
+use crate::ops::{Ink, Op};
 
 /// One character of the atlas: 1 bpp, rows top to bottom, each row padded to whole bytes, the
 /// first pixel in the high bit (the BDF bitmap as is).
@@ -49,10 +49,10 @@ impl Font {
 
     /// Draw `text` with the pen starting at `x` on `baseline`. Only the ink is drawn; the caller
     /// clears the background first.
-    pub fn draw(&self, text: &[u8], x: i32, baseline: i32, on: bool, mut op: impl FnMut(Op)) {
+    pub fn draw(&self, text: &[u8], x: i32, baseline: i32, ink: Ink, mut op: impl FnMut(Op)) {
         let mut pen = x;
         for g in text.iter().filter_map(|&c| self.get(c)) {
-            op(Op::Glyph { x: pen + g.x as i32, y: baseline + g.top as i32, glyph: g, on });
+            op(Op::Glyph { x: pen + g.x as i32, y: baseline + g.top as i32, glyph: g, ink });
             pen += g.adv as i32;
         }
     }
@@ -113,11 +113,14 @@ impl core::fmt::Write for Number {
     }
 }
 
-/// Clear the number slot of `row`, then draw its label at the top left and its number on the
-/// chart's bottom line, right-aligned so that "%" and "G" line up in one column on every row.
-pub fn draw_slot(row: &Row, label: &[u8], number: &Number, mut op: impl FnMut(Op)) {
+/// Clear the number slot of `row`, then draw its name at the top left and its number centred on
+/// the chart's height, right-aligned so that "%" and "G" line up in one column on every row.
+/// `ink` is the number's level: the row's colour, or dim when the number is stale.
+pub fn draw_slot(row: &Row, label: &[u8], number: &Number, ink: Ink, mut op: impl FnMut(Op)) {
     clear_with_label(row, label, &mut op);
-    draw_number(row, number, row.number_baseline() as i32, &mut op);
+    let big = DIGITS.get(b'0').map_or(0, |g| g.h as i32);
+    let baseline = row.chart_y as i32 + (row.chart_h as i32 + big) / 2;
+    draw_number(row, number, baseline, ink, &mut op);
 }
 
 /// The memory slot: as `draw_slot`, with the limits of the zoomed y axis (design.md 5.2) as
@@ -130,6 +133,7 @@ pub fn draw_mem_slot(
     label: &[u8],
     number: &Number,
     limits: Option<(Number, Number)>,
+    ink: Ink,
     mut op: impl FnMut(Op),
 ) {
     clear_with_label(row, label, &mut op);
@@ -137,26 +141,26 @@ pub fn draw_mem_slot(
     let (top, bottom) = (row.label_baseline() as i32, row.number_baseline() as i32);
     if let Some((lo, hi)) = &limits {
         for (text, baseline) in [(hi.as_bytes(), top), (lo.as_bytes(), bottom)] {
-            LABELS.draw(text, right - LABELS.width(text), baseline, true, &mut op);
+            LABELS.draw(text, right - LABELS.width(text), baseline, Ink::Dim, &mut op);
         }
     }
     // Centre the number's digits in the rows between the two limits.
     let small = LABELS.get(b'0').map_or(0, |g| g.h as i32);
     let big = DIGITS.get(b'0').map_or(0, |g| g.h as i32);
     let free = bottom - small - top;
-    draw_number(row, number, top + (free - big) / 2 + big, &mut op);
+    draw_number(row, number, top + (free - big) / 2 + big, ink, &mut op);
 }
 
 fn clear_with_label(row: &Row, label: &[u8], op: &mut impl FnMut(Op)) {
     let (x, y, w, h) = row.slot();
-    op(Op::Rect { x: x as i32, y: y as i32, w, h, fill: true, t: 0, on: false });
-    LABELS.draw(label, x as i32, row.label_baseline() as i32, true, op);
+    op(Op::Rect { x: x as i32, y: y as i32, w, h, fill: true, t: 0, ink: Ink::Background });
+    NAMES.draw(label, x as i32, row.name_baseline() as i32, Ink::Line(row.index), op);
 }
 
-fn draw_number(row: &Row, number: &Number, baseline: i32, op: &mut impl FnMut(Op)) {
+fn draw_number(row: &Row, number: &Number, baseline: i32, ink: Ink, op: &mut impl FnMut(Op)) {
     let text = number.as_bytes();
     let right = row.number_right() as i32;
-    DIGITS.draw(text, right - DIGITS.width(text), baseline, true, op);
+    DIGITS.draw(text, right - DIGITS.width(text), baseline, ink, op);
 }
 
 #[cfg(test)]
@@ -165,23 +169,24 @@ mod tests {
     use crate::layout;
 
     fn ink(label: &[u8], number: &Number) -> Vec<(i32, i32)> {
-        let row = layout::rows(400, 240)[0];
+        let row = layout::rows(480, 272)[0];
         let mut lit = Vec::new();
-        draw_slot(&row, label, number, lit_pixels(&mut lit));
+        draw_slot(&row, label, number, Ink::Line(0), lit_pixels(&mut lit));
         lit
     }
 
     /// Glyph ink of the memory slot, by part: the limits (top, bottom) and the number.
     fn mem_ink(number: &Number, lo: f32, hi: f32) -> [Vec<(i32, i32)>; 3] {
-        let row = layout::rows(400, 240)[2];
+        let row = layout::rows(480, 272)[2];
         let mut all = Vec::new();
-        draw_mem_slot(&row, b"MEM", number, Some((Number::gb(lo), Number::gb(hi))), lit_pixels(&mut all));
-        let label_right = ink(b"MEM", &Number::dashes()).iter().map(|p| p.0).max().unwrap();
+        draw_mem_slot(&row, b"MEM", number, Some((Number::gb(lo), Number::gb(hi))), Ink::Line(2), lit_pixels(&mut all));
+        let name_bottom = row.name_baseline() as i32;
+        let name = ink(b"MEM", &Number::dashes());
+        let label_right = name.iter().filter(|p| p.1 < name_bottom).map(|p| p.0).max().unwrap();
         let (top, bottom) = (row.label_baseline() as i32, row.number_baseline() as i32);
-        let small = |p: &&(i32, i32)| p.1 < top || p.1 >= bottom - 12;
         let limit_top = all.iter().filter(|p| p.1 < top && p.0 > label_right).copied().collect();
         let limit_bottom = all.iter().filter(|p| p.1 >= bottom - 12).copied().collect();
-        let number = all.iter().filter(|p| !small(p)).copied().collect();
+        let number = all.iter().filter(|p| p.1 >= name_bottom && p.1 < bottom - 12).copied().collect();
         [limit_top, limit_bottom, number]
     }
 
@@ -204,8 +209,11 @@ mod tests {
         for c in b"0123456789.%G-" {
             assert!(DIGITS.get(*c).is_some(), "digit atlas lacks {}", *c as char);
         }
-        for c in b"CPUGME0123456789." {
+        for c in b"0123456789.G" {
             assert!(LABELS.get(*c).is_some(), "label atlas lacks {}", *c as char);
+        }
+        for c in b"CPUGME" {
+            assert!(NAMES.get(*c).is_some(), "name atlas lacks {}", *c as char);
         }
     }
 
@@ -232,7 +240,7 @@ mod tests {
 
     #[test]
     fn the_widest_numbers_stay_inside_the_slot() {
-        let row = layout::rows(400, 240)[0];
+        let row = layout::rows(480, 272)[0];
         let (x, y, w, h) = row.slot();
         for n in [Number::gb(97.4), Number::gb(9999.0), Number::percent(100.0)] {
             for (px, py) in ink(b"MEM", &n) {
@@ -253,15 +261,25 @@ mod tests {
     #[test]
     fn the_label_and_the_number_do_not_touch() {
         let lit = ink(b"MEM", &Number::gb(88.8));
-        let row = layout::rows(400, 240)[0];
-        let label_bottom = lit.iter().filter(|p| p.1 <= row.label_baseline() as i32).map(|p| p.1).max();
-        let number_top = lit.iter().filter(|p| p.1 > row.label_baseline() as i32).map(|p| p.1).min();
+        let row = layout::rows(480, 272)[0];
+        let label_bottom = lit.iter().filter(|p| p.1 <= row.name_baseline() as i32).map(|p| p.1).max();
+        let number_top = lit.iter().filter(|p| p.1 > row.name_baseline() as i32).map(|p| p.1).min();
         assert!(number_top.unwrap() - label_bottom.unwrap() > 4);
     }
 
     #[test]
+    fn the_number_is_centred_on_the_chart_height() {
+        let row = layout::rows(480, 272)[0];
+        let lit = ink(b"CPU", &Number::percent(88.0));
+        let number: Vec<_> = lit.iter().filter(|p| p.1 > row.name_baseline() as i32).collect();
+        let (top, bottom) = (number.iter().map(|p| p.1).min().unwrap(), number.iter().map(|p| p.1).max().unwrap());
+        let (chart_top, chart_bottom) = (row.chart_y as i32, (row.chart_y + row.chart_h) as i32 - 1);
+        assert!(((top - chart_top) - (chart_bottom - bottom)).abs() <= 1, "{top}..{bottom} in {chart_top}..{chart_bottom}");
+    }
+
+    #[test]
     fn the_memory_limits_sit_level_with_the_chart_edges_and_the_number_between() {
-        let row = layout::rows(400, 240)[2];
+        let row = layout::rows(480, 272)[2];
         let [top, bottom, number] = mem_ink(&Number::gb(128.0), 100.0, 130.0);
         let ys = |v: &Vec<(i32, i32)>| (v.iter().map(|p| p.1).min().unwrap(), v.iter().map(|p| p.1).max().unwrap());
         assert_eq!(ys(&top).1, row.label_baseline() as i32 - 1);
@@ -274,7 +292,7 @@ mod tests {
 
     #[test]
     fn the_memory_slot_stays_inside_the_slot_and_lines_up_on_the_right() {
-        let row = layout::rows(400, 240)[2];
+        let row = layout::rows(480, 272)[2];
         let (x, y, w, h) = row.slot();
         let [top, bottom, number] = mem_ink(&Number::gb(9999.0), 99.5, 99.9);
         for &(px, py) in top.iter().chain(&bottom).chain(&number) {
