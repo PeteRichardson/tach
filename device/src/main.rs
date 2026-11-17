@@ -137,8 +137,9 @@ fn main() -> ! {
     let (mut spi, cs) = bus.free();
     let spi_hz = spi.set_baudrate(clocks.peripheral_clock.freq(), SPI_HZ.Hz()).to_Hz();
 
-    // The HAL's own write waits after every byte; this bus keeps the FIFO full. See fifo_spi.rs.
-    let mut panel = Ra8875::new(ra8875::Bus::new(FifoSpi::new(spi), cs), wait);
+    // From here, the SPI port drives CS itself, and each access is one 16-bit frame. See
+    // fifo_spi.rs.
+    let mut panel = Ra8875::new(FifoSpi::new(spi, cs.into_function::<FunctionSpi>()), wait);
 
     let (w, h) = panel.size();
     rprintln!("tach up: RA8875 {}x{} @ {} Hz SPI ({} Hz requested)", w, h, spi_hz, SPI_HZ);

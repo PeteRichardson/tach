@@ -22,7 +22,7 @@ Source for the pin facts below:
 | **GP18** (24) | `SCK` | SPI0 SCK. Verified valid in `rp235x-hal` 0.4 (`spi/pins.rs`: SPI0 SCK = GP2, GP6, GP18, GP22). |
 | **GP19** (25) | `MOSI` | SPI0 TX. Verified (SPI0 TX = GP3, GP7, GP19, GP23). |
 | **GP16** (21) | `MISO` | SPI0 RX. Verified (SPI0 RX = GP0, GP4, GP16, GP20). The firmware reads only during init, at 1 MHz (see "SPI settings"); touch will need it. |
-| **GP17** (22) | `CS` | Driven as **plain GPIO**. Active **low** on this board. |
+| **GP17** (22) | `CS` | SPI0 CSn. Active **low** on this board. A plain GPIO during init; after init the SPI port drives it (see "SPI settings"). |
 | **GP15** (20) | `RST` | Active low: pull low to reset the RA8875. |
 | **GP14** (19) | `INT` | Goes low when the panel is touched. Optional, but the guide says it improves touch accuracy. |
 | **GP13** (17) | `WAIT` | Optional. Active low while the RA8875 is busy, so the firmware can poll a pin and not the status register. |
@@ -72,10 +72,9 @@ compliant.
 | Clock for reads | **6 MHz or less** | measured 2026-11-16: above about 6 MHz, every byte read back one bit late (`0x1F` as `0x0F`), probably from the delay through the level shifter and the MISO tristate buffer. So the firmware reads only during init, at 1 MHz. A divider change for each read hung the SPI port after some seconds to minutes. Adafruit's CircuitPython driver also says: *"6 MHz was about the fastest that it would stably run"* |
 | Clock during init | slow, until the RA8875 PLL is set | the PLL is not running at reset; the Adafruit Arduino driver uses a slow clock for this phase |
 | Mode | CPOL 0, CPHA 0 (`MODE_0`) | measured 2026-11-16 with `src/bin/ra8875_bringup.rs`: chip ID `0x75` read back in mode 0 at 1 MHz and at 5.77 MHz |
-| CS | low while clocking, high between transactions | active low |
+| CS | low for each two-byte access, high between accesses | active low. After init the SPI port drives it: 16-bit frames in mode 0 raise CSn for one clock between frames, so one frame is one access. But one clock of CS high is too short: about 1 access in 100,000 was lost (measured 2026-11-17, register read-back before each glyph). The firmware pauses about 107 ns more between accesses, and then 0 were lost in 106,000 glyphs |
 | WAIT | polled for busy in place of a status read | measured 2026-11-16: once WAIT is high, STSR shows the drawing engine and the block transfer engine idle, also at the end of each glyph transfer |
 
-With these settings, measure the full-frame draw time again (it was 30 ms at 25 MHz).
 
 ## The previous panel (SHARP 2.7")
 
