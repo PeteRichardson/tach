@@ -14,6 +14,12 @@ as in Activity Monitor.
 
 The full design is in [design.md](design.md).
 
+Version 2 (`device/`) shows the same display on a Raspberry Pi Pico 2 with an
+RA8875 driver board and a 4.3" 480×272 TFT. It draws at 30 frames each second.
+The design is in [docs/device-v2.md](docs/device-v2.md).
+
+![The v2 display on the RA8875 panel: the same CPU, GPU and memory rows, in colour](images/tach-ra8875.jpg)
+
 ## Files
 
 | File | Where it runs | What it does |
