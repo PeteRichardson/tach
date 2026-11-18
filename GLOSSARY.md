@@ -98,6 +98,11 @@ Each panel maps the four levels onto its own colours, which is how one layout lo
 on a colour panel and on a one-bit panel with no grey.
 _Avoid_: layer, style, theme
 
+**Core bar**:
+One core's bar in the CPU row: LED segments lit up to its smoothed level, and one peak segment
+that holds the highest recent raw value, then falls.
+_Avoid_: column (a span of time in the curves)
+
 **Pull**:
 The device asking the Mac for one sample per frame and drawing the reply. The alternative, push,
 lets the Mac's timer decide when the display moves.
@@ -127,5 +132,6 @@ _Avoid_: prototype (used for throwaway code, not hardware)
 5. [ADR-0005](adr/0005-the-mac-clock-times-the-chart-and-the-rate-goes-on-the-wire.md) — The Mac clock times the chart, and the rate goes on the wire
 6. [ADR-0006](adr/0006-the-device-pulls-one-sample-per-frame.md) — The device pulls one sample per frame
 7. [ADR-0007](adr/0007-cpu-from-mach-ticks-macmon-stays-for-gpu-only.md) — CPU from Mach ticks, macmon stays for GPU only
+8. [ADR-0008](adr/0008-the-cpu-row-shows-one-bar-per-core.md) — The CPU row shows one bar per core
 
 Working brief and open questions: [docs/device-v2.md](device-v2.md).

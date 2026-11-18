@@ -182,6 +182,10 @@ class CpuTicks:
         self.task = self.libc.mach_task_self()
         self.prev = None
         self.percent = None
+        # Busy percent of each core, in `order`: kernel core numbers, fastest cluster first.
+        # None keeps the kernel's order.
+        self.order = None
+        self.cores = None
 
     def ticks(self):
         """Return [(busy, idle), ...] tick counts since boot, one pair per core."""
@@ -213,12 +217,62 @@ class CpuTicks:
         now = self.ticks()
         if self.prev is not None and len(self.prev) == len(now):
             # Counters are 32-bit and wrap, so take each core's delta on its own.
-            d_busy = sum((b - pb) & 0xFFFFFFFF for (b, _), (pb, _) in zip(now, self.prev, strict=True))
-            d_idle = sum((i - pi) & 0xFFFFFFFF for (_, i), (_, pi) in zip(now, self.prev, strict=True))
+            deltas = [((b - pb) & 0xFFFFFFFF, (i - pi) & 0xFFFFFFFF)
+                      for (b, i), (pb, pi) in zip(now, self.prev, strict=True)]
+            d_busy = sum(busy for busy, _ in deltas)
+            d_idle = sum(idle for _, idle in deltas)
             if d_busy + d_idle:
                 self.percent = 100.0 * d_busy / (d_busy + d_idle)
+            self.read_cores(deltas)
         self.prev = now
         return self.percent
+
+    def read_cores(self, deltas):
+        """Each core's busy percent from its (busy, idle) deltas. A core with no tick keeps its value."""
+        order = self.order or range(len(deltas))
+        cores = self.cores or [0.0] * len(order)
+        for slot, core in enumerate(order):
+            busy, idle = deltas[core]
+            if busy + idle:
+                cores[slot] = 100.0 * busy / (busy + idle)
+        self.cores = cores
+
+
+def core_order(ioreg):
+    """Return (kernel core numbers with the fastest cluster type first, how many of that type).
+
+    `ioreg` is the text of `ioreg -l -p IODeviceTree -r -n cpus`. Each core has a
+    "cluster-type": P, then M, then E, fastest first. On the M5 Ultra, P is the
+    super cores and M the performance cores (sysctl hw.perflevel0 and 1). None
+    and 0 when the text has no cluster types.
+    """
+    kinds = {}
+    core = kind = None
+    for line in ioreg.splitlines():
+        if "+-o cpu" in line:
+            core = kind = None
+        elif '"logical-cpu-id" =' in line:
+            core = int(line.split("=")[1])
+        elif '"cluster-type" =' in line:
+            kind = line.split('"')[3]
+        if core is not None and kind is not None:
+            kinds[core] = kind
+    if not kinds:
+        return None, 0
+    rank = {"P": 0, "M": 1, "E": 2}
+    order = sorted(kinds, key=lambda c: (rank.get(kinds[c], 3), c))
+    first = kinds[order[0]]
+    return order, sum(1 for k in kinds.values() if k == first)
+
+
+def read_core_order():
+    """core_order() of this Mac. (None, 0) if ioreg fails."""
+    try:
+        out = subprocess.run(["ioreg", "-l", "-p", "IODeviceTree", "-r", "-n", "cpus"],
+                             capture_output=True, text=True, timeout=5, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None, 0
+    return core_order(out)
 
 
 # --- CPU and GPU from macmon -------------------------------------------------
@@ -440,17 +494,22 @@ def parse_pull(line):
     return seq
 
 
-def build_reply(seq, t, cpu, tc, gpu_sample, mem_window, mem_total):
+def build_reply(seq, t, cpu, tc, gpu_sample, mem_window, mem_total, cores=None, nsuper=0):
     """One reply line for pull `seq` (docs/device-v2.md, "Wire").
 
     `pull` echoes the request. `t`, `tc`, `tg` and `tm` are Mac monotonic ms:
     when the reply was built, and when each value was read. A value that is
     unknown is left out, not sent as zero. `ok` is false when macmon is stale.
+    `cores` is each core's busy percent, read with `cpu`: one hex byte each,
+    the first `nsuper` of them super cores.
     """
     msg = {"pull": seq, "v": PROTOCOL_VERSION, "t": t, "hz": round(1000 / PULL_MACMON_INTERVAL_MS, 1)}
     if cpu is not None:
         msg["cpu"] = round(cpu, 1)
         msg["tc"] = tc
+        if cores:
+            msg["cores"] = "".join("{:02x}".format(round(p)) for p in cores)
+            msg["nsuper"] = nsuper
     if gpu_sample is not None:
         msg["gpu"] = round(gpu_sample[0], 1)
         msg["tg"] = gpu_sample[1]
@@ -473,18 +532,19 @@ class PullServer(threading.Thread):
         self.memory = memory
         self.macmon = macmon
         self.cpu_ticks = CpuTicks()
+        self.cpu_ticks.order, self.nsuper = read_core_order()
 
     def run(self):
         while True:
             port = find_tach_port()
             if port is not None:
                 self.macmon.set_interval(PULL_MACMON_INTERVAL_MS)
-                serve_pulls(port, self.memory, self.macmon, self.cpu_ticks)
+                serve_pulls(port, self.memory, self.macmon, self.cpu_ticks, self.nsuper)
                 self.macmon.set_interval(int(SEND_INTERVAL_S * 1000))
             time.sleep(RETRY_S)
 
 
-def serve_pulls(port, memory, macmon, cpu_ticks):
+def serve_pulls(port, memory, macmon, cpu_ticks, nsuper):
     """Answer pulls from the v2 device until it disconnects."""
     import serial
 
@@ -507,7 +567,8 @@ def serve_pulls(port, memory, macmon, cpu_ticks):
                 continue
             cpu = cpu_ticks.read()
             tc = now_ms()
-            reply = build_reply(seqs[-1], now_ms(), cpu, tc, macmon.gpu_sample(), mem.take(), memory.total_gb)
+            reply = build_reply(seqs[-1], now_ms(), cpu, tc, macmon.gpu_sample(), mem.take(), memory.total_gb,
+                                cpu_ticks.cores, nsuper)
             conn.write(reply.encode("utf-8"))
     except (serial.SerialException, OSError) as e:
         log("disconnected:", e)

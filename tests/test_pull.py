@@ -66,10 +66,22 @@ def test_unknown_values_are_omitted_not_zero(tach_sender):
 
 
 def test_full_reply_fits_the_device_line_buffer(tach_sender):
-    """device/src/link.rs drops a line longer than LINE_MAX (256 B)."""
+    """device/src/link.rs drops a line longer than LINE_MAX (512 B)."""
     line = tach_sender.build_reply(4294967295, 10**12, 100.0, 10**12, (100.0, 10**12),
-                                   (1023.99, 1023.99, 1023.99, 10**12), 1024.0)
-    assert len(line.encode()) - 1 <= 256
+                                   (1023.99, 1023.99, 1023.99, 10**12), 1024.0,
+                                   cores=[100.0] * 64, nsuper=64)
+    assert len(line.encode()) - 1 <= 512
+
+
+def test_cores_go_as_one_hex_byte_each(tach_sender):
+    msg = reply(tach_sender, cores=[0.0, 50.4, 100.0, 9.6], nsuper=1)
+    assert msg["cores"] == "0032640a"
+    assert msg["nsuper"] == 1
+
+
+def test_no_cores_without_cpu(tach_sender):
+    msg = reply(tach_sender, cpu=None, cores=[1.0], nsuper=1)
+    assert "cores" not in msg and "nsuper" not in msg
 
 
 # --- MemWindow ----------------------------------------------------------------
@@ -153,6 +165,44 @@ def test_cpu_survives_counter_wrap(tach_sender):
     cpu = make_cpu_ticks(tach_sender, [[(top, 0, top, 0)], [(10, 0, 10, 0)]])
     cpu.read()
     assert cpu.read() == 50.0  # 20 busy, 20 idle across the wrap
+
+
+def test_cpu_reads_each_core_in_the_given_order(tach_sender):
+    cpu = make_cpu_ticks(tach_sender, [
+        [(0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0)],
+        [(10, 0, 30, 0), (0, 0, 40, 0), (40, 0, 0, 0)],
+        [(10, 0, 30, 0), (0, 0, 50, 0), (40, 0, 0, 0)],
+    ])
+    cpu.order = [2, 0, 1]
+    cpu.read()
+    cpu.read()
+    assert cpu.cores == [100.0, 25.0, 0.0]
+    cpu.read()
+    assert cpu.cores == [100.0, 25.0, 0.0], "a core with no tick keeps its value"
+
+
+IOREG = """+-o cpus  <class IOPlatformDevice>
+  +-o cpu0@0  <class IOPlatformDevice>
+  |     "logical-cpu-id" = 0
+  |     "cluster-type" = <"M">
+  +-o cpu1@1  <class IOPlatformDevice>
+  |     "cluster-type" = <"P">
+  |     "logical-cpu-id" = 1
+  +-o cpu2@2  <class IOPlatformDevice>
+  |     "logical-cpu-id" = 2
+  |     "cluster-type" = <"E">
+  +-o cpu3@3  <class IOPlatformDevice>
+  |     "logical-cpu-id" = 3
+  |     "cluster-type" = <"P">
+"""
+
+
+def test_core_order_puts_the_fastest_cluster_type_first(tach_sender):
+    assert tach_sender.core_order(IOREG) == ([1, 3, 0, 2], 2)
+
+
+def test_core_order_without_cluster_types_keeps_the_kernel_order(tach_sender):
+    assert tach_sender.core_order("") == (None, 0)
 
 
 # --- find_tach_port -----------------------------------------------------------

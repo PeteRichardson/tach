@@ -72,6 +72,10 @@ The image is composed of four semantic levels, mapped per panel because a mono p
 | line | colour per row | dark |
 | grid | darker colour | light, dotted/checked (dither cannot be simulated) |
 
+The CPU core bars add two more: a lit segment, in a gradient from the core type's dark tone up
+through yellow to red, and an unlit segment, very dark. The 1 bpp panel shows them as dark and as
+background ([ADR-0008](adr/0008-the-cpu-row-shows-one-bar-per-core.md)).
+
 ## Transport
 
 - RA8875 is driven by **commands against its own 768 KB VRAM**, never by pushed frames:
@@ -206,6 +210,10 @@ lines per second, `gpu_active_ratio` changes about 6.5 times per second, `host_s
 1.3 µs, `host_statistics64` costs about 1 µs. Python reached 26.5 Hz when asked for 30 Hz, so the
 language is not the limit. Full table in Mac-side sources below.
 
+**Per-core CPU** ([ADR-0008](adr/0008-the-cpu-row-shows-one-bar-per-core.md)): `cores` is one hex
+byte for each core's busy percent, the fastest cluster type first, and `nsuper` counts that type.
+Both come with `cpu` and are optional. The CPU row draws them as core bars.
+
 `host_statistics64` keeps the Activity Monitor memory formula and adds min/max/last sub-samples per
 reply, so short memory spikes survive a compressed chart column (issue #9).
 
@@ -288,10 +296,11 @@ format both follow from these.
 | Cadence | Device pulls one sample per frame (Q33) | [ADR-0006](adr/0006-the-device-pulls-one-sample-per-frame.md) |
 | Sources | CPU native ticks at frame rate, memory native, macmon for GPU only (Q31) | [ADR-0007](adr/0007-cpu-from-mach-ticks-macmon-stays-for-gpu-only.md) |
 | CPU meaning | `busy/(busy+idle)` over all cores, the Activity Monitor definition (Q32) | consistent with memory |
+| CPU row | One bar for each core, peak hold 600 ms, fall 30 %/s; the number is the mean (#46) | [ADR-0008](adr/0008-the-cpu-row-shows-one-bar-per-core.md) |
 | Sampling | ~8 Hz from macmon, native calls far faster, time-placed regardless | ADR-0002 |
 | Retention nudge | 1 px every 5 min, 4 diagonal positions, as one whole-layer scroll (Q39) | free on the controller |
 | Sender language | Keep Python 3 + pyserial (Q38) | measured 26.5 Hz against a 30 Hz request; Python was never the limit |
-| Wire keys | `pull, v, t, hz, cpu, tc, gpu, tg, mem, mem_lo, mem_hi, tm, mem_total, ok` (Q36) | unknown keys ignored, as v1 promises; `pull` echoes the request so a late reply is not taken for this one |
+| Wire keys | `pull, v, t, hz, cpu, tc, gpu, tg, mem, mem_lo, mem_hi, tm, mem_total, ok` (Q36), plus optional `cores, nsuper` (#46) | unknown keys ignored, as v1 promises; `pull` echoes the request so a late reply is not taken for this one |
 | Issue triage | Deferred until the new device boots; PyPortal-only issues close as superseded (Q40) | avoids closing issues against hardware still in service |
 | v1 archive | CircuitPython code to `legacy/pyportal/` at retirement (Q40) | keeps the repo root for v2 |
 

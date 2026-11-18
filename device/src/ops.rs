@@ -19,14 +19,20 @@ pub enum Ink {
     Fill(u8),
     /// A row's curve, name and number, in its colour.
     Line(u8),
+    /// A lit segment of a CPU core bar: `kind` 0 is a super core, 1 a performance core. `f` is
+    /// how high the segment is, 0 to 255 for 0 to 100 %: the colour goes from the core's dark
+    /// tone, to its bright tone, then through yellow to red at the top.
+    Led { kind: u8, f: u8 },
+    /// An unlit segment of a core bar, in a very dark tone of its core's colour.
+    LedOff(u8),
 }
 
 impl Ink {
     /// The level on a 1 bpp panel, which has no grey and no colour: everything but the background
-    /// is ink.
+    /// is ink, except an unlit bar segment.
     #[allow(dead_code, reason = "used by the SHARP backend and the host tests")]
     pub fn on(self) -> bool {
-        self != Ink::Background
+        !matches!(self, Ink::Background | Ink::LedOff(_))
     }
 }
 
