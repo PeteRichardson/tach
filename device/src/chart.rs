@@ -14,7 +14,7 @@
 
 use crate::layout::{Row, GRID_TICK_S, TRAVEL_PX_PER_S};
 use crate::ops::{Ink, Op};
-use crate::wire::Reply;
+use crate::wire::{Reply, MAX_CORES};
 
 /// One bucket is one pixel of travel: 83 ms at 12 px/s.
 pub const BUCKET_MS: u64 = (1000.0 / TRAVEL_PX_PER_S) as u64;
@@ -49,6 +49,172 @@ pub const GAP_MS: u64 = 1500;
 /// 5 s, the same as v1 (`STALE_NS` in code.py) and macmon's limit in tach-sender.py
 /// (`MACMON_STALE_S`), so all three say one thing (issue #27).
 pub const STALE_MS: u64 = 5000;
+
+/// Time constant of a core bar's smoothing: short, so the bars move like a meter, not a chart.
+pub const EMA_MS: f32 = 100.0;
+/// How long a peak marker stays at its peak, then how fast it falls, in percent per second.
+pub const HOLD_MS: u64 = 600;
+pub const FALL_PER_S: f32 = 30.0;
+
+#[derive(Clone, Copy)]
+struct Bar {
+    level: f32,
+    peak: f32,
+    /// When the peak was set, Mac ms.
+    at: u64,
+}
+
+const NO_BAR: Bar = Bar { level: 0.0, peak: 0.0, at: 0 };
+
+/// One bar for each core, like an audio spectrum analyser: a smoothed level, and a peak marker
+/// that holds the highest raw value, then falls back to the level.
+#[derive(Clone, Copy)]
+pub struct Bars {
+    bars: [Bar; MAX_CORES],
+    n: u8,
+    nsuper: u8,
+    /// Mac time of the newest core sample.
+    t: Option<u64>,
+}
+
+impl Bars {
+    pub const fn new() -> Self {
+        Self { bars: [NO_BAR; MAX_CORES], n: 0, nsuper: 0, t: None }
+    }
+
+    /// Take the core values of one reply. A sample at the same stamp as the last is a repeat.
+    pub fn take(&mut self, r: &Reply) {
+        let (Some(cores), Some(t)) = (r.cores, r.tc) else { return };
+        let pct = cores.percents();
+        if pct.len() != self.n as usize {
+            // A new Mac, or the first sample: start each bar at its value.
+            *self = Self::new();
+            self.n = pct.len() as u8;
+        }
+        self.nsuper = r.nsuper.unwrap_or(0).min(self.n as u32) as u8;
+        let k = match self.t {
+            None => 1.0,
+            Some(last) if t <= last => return,
+            Some(last) => 1.0 - libm::expf(-((t - last) as f32) / EMA_MS),
+        };
+        self.t = Some(t);
+        for (bar, &p) in self.bars.iter_mut().zip(pct) {
+            let raw = p as f32;
+            bar.level += (raw - bar.level) * k;
+            // The fall is worked out when the peak is read, so only a new high changes it.
+            if raw >= bar.peak_at(t) {
+                (bar.peak, bar.at) = (raw, t);
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.n as usize
+    }
+
+    /// How many of the bars, from the left, are super cores.
+    pub fn supers(&self) -> usize {
+        self.nsuper as usize
+    }
+
+    /// The smoothed level of bar `i`, in percent.
+    pub fn level(&self, i: usize) -> f32 {
+        self.bars[i].level
+    }
+
+    /// Where the peak marker of bar `i` is at Mac time `now`, in percent.
+    pub fn peak(&self, i: usize, now: u64) -> f32 {
+        self.bars[i].peak_at(now)
+    }
+}
+
+impl Bar {
+    fn peak_at(&self, now: u64) -> f32 {
+        let falling_ms = now.saturating_sub(self.at).saturating_sub(HOLD_MS);
+        (self.peak - FALL_PER_S * falling_ms as f32 / 1000.0).max(self.level)
+    }
+}
+
+/// A core bar's segments: `SEG_PX` high, one every `SEG_PITCH` px, so a 1 px gap between.
+pub const SEG_PX: u16 = 3;
+pub const SEG_PITCH: usize = 4;
+
+/// How many segments a bar in `row` has: at most 31, so that a full bar's bits fit a u32 shift.
+pub fn segs(row: &Row) -> usize {
+    (row.plot().3 as usize / SEG_PITCH).min(31)
+}
+
+/// The core bars as they are on the panel, so a frame redraws only the segments that changed.
+/// At 36 bars of 17 segments, drawing every segment was more than 600 rects a frame.
+pub struct BarsView {
+    /// Bit `s` of a bar is set when its segment `s` is lit. None when the plot does not show bars.
+    lit: Option<[u32; MAX_CORES]>,
+    /// How many bars were drawn. Another count moves every bar.
+    cores: usize,
+}
+
+impl BarsView {
+    pub const fn new() -> Self {
+        Self { lit: None, cores: 0 }
+    }
+
+    /// The plot was drawn over: the next `draw` clears it and draws every segment.
+    pub fn forget(&mut self) {
+        self.lit = None;
+    }
+
+    /// Draw the CPU row at Mac time `now`: the core bars, or the CPU curve, as before, when the
+    /// sender gives no per-core values.
+    pub fn draw_cpu(&mut self, model: &Model, row: &Row, now: u64, op: impl FnMut(Op)) {
+        if model.bars.len() == 0 {
+            self.forget();
+            draw(&model.cpu, row, now, op)
+        } else {
+            self.draw(&model.bars, row, now, op)
+        }
+    }
+
+    /// Draw `bars` in `row`'s plot at Mac time `now`. They fill the plot's width, the super cores
+    /// first. A bar is lit up to its level, and one more segment shows its peak.
+    pub fn draw(&mut self, bars: &Bars, row: &Row, now: u64, mut op: impl FnMut(Op)) {
+        let (left, top, w, h) = row.plot();
+        let n = segs(row);
+        let cores = bars.len();
+        if cores != self.cores {
+            (self.lit, self.cores) = (None, cores);
+        }
+        let all = self.lit.is_none();
+        if all {
+            blank(row, &mut op);
+        }
+        let lit = self.lit.get_or_insert([0; MAX_CORES]);
+        let count = |v: f32| (v.clamp(0.0, 100.0) / 100.0 * n as f32 + 0.5) as usize;
+        for (i, drawn) in lit.iter_mut().enumerate().take(cores) {
+            let level = count(bars.level(i));
+            let peak = count(bars.peak(i, now));
+            let mut on = (1u32 << level) - 1;
+            if peak > level {
+                on |= 1 << (peak - 1);
+            }
+            let changed = if all { !0 } else { on ^ *drawn };
+            *drawn = on;
+            if changed & ((1 << n) - 1) == 0 {
+                continue;
+            }
+            let kind = (i >= bars.supers()) as u8;
+            let (x0, x1) = (i * w as usize / cores, (i + 1) * w as usize / cores);
+            let (x, bar_w) = (left as i32 + x0 as i32, (x1 - x0) as u16 - 1);
+            for s in (0..n).filter(|s| changed & (1 << s) != 0) {
+                let ink = match on & (1 << s) {
+                    0 => Ink::LedOff(kind),
+                    _ => Ink::Led { kind, f: ((s + 1) * 255 / n) as u8 },
+                };
+                let y = (top + h) as i32 - ((s + 1) * SEG_PITCH) as i32 + 1;
+                op(Op::Rect { x, y, w: bar_w, h: SEG_PX, fill: true, t: 0, ink });
+            }
+        }
+    }
+}
 
 /// Row order on the panel.
 pub const CPU: usize = 0;
@@ -146,13 +312,14 @@ pub type Slow = Series<MEM_BUCKETS>;
 /// The three rows.
 pub struct Model {
     pub cpu: Fast,
+    pub bars: Bars,
     pub gpu: Fast,
     pub mem: Slow,
 }
 
 impl Model {
     pub const fn new() -> Self {
-        Self { cpu: Fast::new(), gpu: Fast::new(), mem: Slow::new() }
+        Self { cpu: Fast::new(), bars: Bars::new(), gpu: Fast::new(), mem: Slow::new() }
     }
 
     /// True if row `i` (`CPU`, `GPU` or `MEM`) is stale at Mac time `now`.
@@ -169,6 +336,7 @@ impl Model {
         if let (Some(v), Some(t)) = (r.cpu, r.tc) {
             self.cpu.add(t, v, v, v);
         }
+        self.bars.take(r);
         if let (Some(v), Some(t)) = (r.gpu, r.tg) {
             self.gpu.add(t, v, v, v);
         }
@@ -609,6 +777,101 @@ mod tests {
             }
         }
         out
+    }
+
+    fn reply(t: u64, cores: &[u8]) -> Reply {
+        let hex: String = cores.iter().map(|c| format!("{c:02x}")).collect();
+        crate::wire::parse(format!(r#"{{"tc":{t},"cores":"{hex}","nsuper":1}}"#).as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn a_bar_follows_its_core_with_a_short_ema() {
+        let mut bars = Bars::new();
+        bars.take(&reply(1000, &[0, 0]));
+        bars.take(&reply(1100, &[100, 0]));
+        // One time constant: 1 - 1/e of the step.
+        let v = bars.level(0);
+        assert!((v - 63.2).abs() < 0.5, "{v}");
+        bars.take(&reply(2000, &[100, 0]));
+        assert!(bars.level(0) > 99.0);
+        assert_eq!((bars.len(), bars.supers()), (2, 1));
+    }
+
+    #[test]
+    fn the_peak_takes_the_raw_value_holds_then_falls() {
+        let mut bars = Bars::new();
+        bars.take(&reply(1000, &[80]));
+        bars.take(&reply(1033, &[0]));
+        assert_eq!(bars.peak(0, 1033), 80.0, "the spike, not the smoothed level");
+        bars.take(&reply(1500, &[0]));
+        assert_eq!(bars.peak(0, 1000 + HOLD_MS), 80.0, "held");
+        assert_eq!(bars.peak(0, 1000 + HOLD_MS + 1000), 80.0 - FALL_PER_S);
+        assert!((bars.peak(0, 10_000) - bars.level(0)).abs() < 1e-3, "it stops at the bar");
+    }
+
+    #[test]
+    fn a_new_spike_under_a_falling_peak_restarts_the_hold() {
+        let mut bars = Bars::new();
+        bars.take(&reply(0, &[90]));
+        bars.take(&reply(2000, &[0]));
+        assert_eq!(bars.peak(0, 2000), 90.0 - 42.0, "1.4 s of fall at 30 %/s");
+        bars.take(&reply(2100, &[70]));
+        assert_eq!(bars.peak(0, 2100 + HOLD_MS), 70.0);
+    }
+
+    #[test]
+    fn the_bars_reset_when_the_core_count_changes() {
+        let mut bars = Bars::new();
+        bars.take(&reply(0, &[90, 90]));
+        bars.take(&reply(33, &[10, 10, 10]));
+        assert_eq!(bars.len(), 3);
+        assert_eq!(bars.peak(0, 33), 10.0);
+    }
+
+    /// The segment rects of one draw, as (x, y, w, ink), in the order drawn.
+    fn segments(view: &mut BarsView, bars: &Bars, now: u64) -> Vec<(i32, i32, u16, Ink)> {
+        let mut out = Vec::new();
+        view.draw(bars, &row(), now, |op| match op {
+            Op::Rect { x, y, w, h: SEG_PX, ink, .. } => out.push((x, y, w, ink)),
+            Op::Rect { ink: Ink::Background, .. } => {}
+            op => panic!("not a segment: {op:?}"),
+        });
+        out
+    }
+
+    #[test]
+    fn each_bar_is_a_stack_of_segments_lit_to_its_level_with_one_peak_segment() {
+        let mut bars = Bars::new();
+        bars.take(&reply(0, &[100, 100]));
+        bars.take(&reply(500, &[60, 0]));
+        let n = segs(&row());
+        let ops = segments(&mut BarsView::new(), &bars, 500);
+        assert_eq!(ops.len(), 2 * n, "every segment of both bars");
+        let lit = |kind: u8| ops.iter().filter(move |o| matches!(o.3, Ink::Led { kind: k, .. } if k == kind)).count();
+        assert_eq!(lit(0), (n as f32 * 0.6).round() as usize + 1, "super bar: 60 % lit, plus the peak at the top");
+        assert_eq!(lit(1), 1, "performance bar: only its peak");
+        let top = ops.iter().filter(|o| o.0 == ops[0].0).min_by_key(|o| o.1).unwrap();
+        assert!(matches!(top.3, Ink::Led { kind: 0, f: 255 }), "the peak at 100 % is the top segment, at full red");
+        let (left, top_y, w, h) = row().plot();
+        assert_eq!(ops.iter().map(|o| o.1).min(), Some(top_y as i32 + h as i32 - (n * SEG_PITCH) as i32 + 1));
+        assert_eq!(ops.iter().map(|o| o.0).min(), Some(left as i32), "no padding on the left");
+        assert_eq!(ops.iter().map(|o| o.0 + o.2 as i32).max(), Some((left + w) as i32 - 1), "or the right, but the gap");
+    }
+
+    #[test]
+    fn a_frame_redraws_only_the_segments_that_changed() {
+        let mut bars = Bars::new();
+        bars.take(&reply(0, &[0, 0]));
+        let mut view = BarsView::new();
+        segments(&mut view, &bars, 0);
+        assert_eq!(segments(&mut view, &bars, 33), vec![], "nothing moved");
+        bars.take(&reply(5000, &[0, 100]));
+        let changed = segments(&mut view, &bars, 5000);
+        assert_eq!(changed.len(), segs(&row()), "the second bar fills; the first stays dark");
+        view.forget();
+        assert_eq!(segments(&mut view, &bars, 5000).len(), 2 * segs(&row()), "after a blank, all again");
+        bars.take(&reply(5033, &[0, 0, 0]));
+        assert_eq!(segments(&mut view, &bars, 5033).len(), 3 * segs(&row()), "a new core count moves every bar");
     }
 
     #[test]

@@ -1,12 +1,42 @@
 //! The reply line from tach-sender.py, read without an allocator (docs/device-v2.md, "Wire").
 //!
 //! The reply is one flat JSON object of numbers and booleans. This reader takes exactly that
-//! shape: no nesting, and a string value is skipped. A key it does not know is skipped too, so the
+//! shape: no nesting, and a string value is skipped, except `cores`. A key it does not know is skipped too, so the
 //! Mac can add keys without a firmware change. A value that does not parse as its key's type is
 //! treated as missing, the same as a key the Mac left out.
 
 /// The protocol version this firmware reads. A reply with another `v` is not used.
 pub const VERSION: u32 = 2;
+
+/// The most cores a reply can carry. The Mac Studio this was built for has 36.
+pub const MAX_CORES: usize = 64;
+
+/// Busy percent of each core, 0 to 100, in the order the Mac sent them: the super cores first.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cores {
+    pct: [u8; MAX_CORES],
+    n: u8,
+}
+
+impl Cores {
+    /// One byte of hex for each core. None if the text is not whole bytes of hex, or has more
+    /// than MAX_CORES of them. A byte past 100 reads as 100.
+    fn from_hex(hex: &[u8]) -> Option<Cores> {
+        if hex.len() % 2 != 0 || hex.len() > 2 * MAX_CORES {
+            return None;
+        }
+        let digit = |c: u8| (c as char).to_digit(16);
+        let mut pct = [0; MAX_CORES];
+        for (p, pair) in pct.iter_mut().zip(hex.chunks(2)) {
+            *p = (digit(pair[0])? * 16 + digit(pair[1])?).min(100) as u8;
+        }
+        Some(Cores { pct, n: (hex.len() / 2) as u8 })
+    }
+
+    pub fn percents(&self) -> &[u8] {
+        &self.pct[..self.n as usize]
+    }
+}
 
 /// One reply. Every field is optional: the Mac leaves out a value it does not know.
 /// Stamps (`t`, `tc`, `tg`, `tm`) are Mac monotonic milliseconds.
@@ -19,6 +49,9 @@ pub struct Reply {
     /// CPU busy percent, and when it was read.
     pub cpu: Option<f32>,
     pub tc: Option<u64>,
+    /// Busy percent of each core, read at `tc`, and how many of them are super cores.
+    pub cores: Option<Cores>,
+    pub nsuper: Option<u32>,
     /// GPU busy percent, and when macmon reported it.
     pub gpu: Option<f32>,
     pub tg: Option<u64>,
@@ -65,15 +98,18 @@ pub fn parse(line: &[u8]) -> Option<Reply> {
 enum Value<'a> {
     Num(&'a str),
     Bool(bool),
-    /// A string or null: valid JSON, but no key this firmware reads has that type.
+    Str(&'a [u8]),
+    /// Null: valid JSON, but no key this firmware reads has that type.
     Other,
 }
 
 impl Reply {
     fn set(&mut self, key: &[u8], value: Value) {
         let Value::Num(n) = value else {
-            if let (b"ok", Value::Bool(b)) = (key, value) {
-                self.ok = Some(b);
+            match (key, value) {
+                (b"ok", Value::Bool(b)) => self.ok = Some(b),
+                (b"cores", Value::Str(hex)) => self.cores = Cores::from_hex(hex),
+                _ => {}
             }
             return;
         };
@@ -83,6 +119,7 @@ impl Reply {
             b"t" => self.t = n.parse().ok(),
             b"cpu" => self.cpu = n.parse().ok(),
             b"tc" => self.tc = n.parse().ok(),
+            b"nsuper" => self.nsuper = n.parse().ok(),
             b"gpu" => self.gpu = n.parse().ok(),
             b"tg" => self.tg = n.parse().ok(),
             b"mem" => self.mem = n.parse().ok(),
@@ -143,7 +180,7 @@ impl<'a> Scan<'a> {
 
     fn value(&mut self) -> Option<Value<'a>> {
         match self.peek()? {
-            b'"' => self.string().map(|_| Value::Other),
+            b'"' => self.string().map(Value::Str),
             b't' => self.literal(b"true").map(|_| Value::Bool(true)),
             b'f' => self.literal(b"false").map(|_| Value::Bool(false)),
             b'n' => self.literal(b"null").map(|_| Value::Other),
@@ -175,6 +212,26 @@ mod tests {
         assert_eq!((r.gpu, r.tg), (Some(45.7), Some(950)));
         assert_eq!((r.mem, r.mem_lo, r.mem_hi, r.tm), (Some(61.23), Some(60.9), Some(61.46), Some(990)));
         assert_eq!((r.mem_total, r.ok), (Some(128.0), Some(true)));
+    }
+
+    #[test]
+    fn reads_per_core_percents_from_hex() {
+        let r = parse(br#"{"cores":"00320a64ff","nsuper":2}"#).unwrap();
+        let c = r.cores.unwrap();
+        assert_eq!(c.percents(), &[0, 50, 10, 100, 100], "past 100 clamps to 100");
+        assert_eq!(r.nsuper, Some(2));
+    }
+
+    #[test]
+    fn bad_core_hex_is_missing() {
+        for line in [&br#"{"cores":"0"}"#[..], br#"{"cores":"zz"}"#, br#"{"cores":7}"#] {
+            assert_eq!(parse(line).unwrap().cores, None, "{:?}", core::str::from_utf8(line));
+        }
+        let long = [b'1'; 2 * MAX_CORES + 2];
+        let mut line = b"{\"cores\":\"".to_vec();
+        line.extend_from_slice(&long);
+        line.extend_from_slice(b"\"}");
+        assert_eq!(parse(&line).unwrap().cores, None, "more cores than the firmware keeps");
     }
 
     #[test]

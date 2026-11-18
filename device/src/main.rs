@@ -157,6 +157,7 @@ fn main() -> ! {
     // RA8875, so the numbers measured here carry over to the target panel.
     let frame_us = TICKS_PER_S / FPS as u64;
     let mut model = chart::Model::new();
+    let mut cpu_bars = chart::BarsView::new();
     let mem_axis = chart::Axis::new(rows[chart::MEM].plot().2);
     // Mac monotonic ms minus device ms, from the newest reply, and the device time of that reply.
     // Both None until the first reply. chart::mac_now turns them into the Mac time of a frame.
@@ -214,7 +215,7 @@ fn main() -> ! {
             match now {
                 Some(now) => {
                     match i {
-                        chart::CPU => chart::draw(&model.cpu, row, now, |op| panel.apply(op)),
+                        chart::CPU => cpu_bars.draw_cpu(&model, row, now, |op| panel.apply(op)),
                         chart::GPU => chart::draw(&model.gpu, row, now, |op| panel.apply(op)),
                         _ => {
                             scale = chart::draw_compressed(&model.mem, row, &mem_axis, now, |op| {
@@ -224,7 +225,12 @@ fn main() -> ! {
                     }
                     *stale = model.is_stale(i, now);
                 }
-                None => chart::blank(row, |op| panel.apply(op)),
+                None => {
+                    if i == chart::CPU {
+                        cpu_bars.forget();
+                    }
+                    chart::blank(row, |op| panel.apply(op))
+                }
             }
             let (number, ink) = match &numbers[i] {
                 Some(n) if !*stale => (n, Ink::Line(row.index)),

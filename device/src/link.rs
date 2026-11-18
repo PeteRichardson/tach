@@ -14,8 +14,9 @@ use static_cell::StaticCell;
 use usb_device::{bus::UsbBusAllocator, prelude::*};
 use usbd_serial::SerialPort;
 
-/// Longest line the link keeps. A full Q36 reply is about 200 B. A longer line is dropped whole.
-pub const LINE_MAX: usize = 256;
+/// Longest line the link keeps. A full Q36 reply is about 200 B, and 36 per-core values add
+/// about 90 B. A longer line is dropped whole.
+pub const LINE_MAX: usize = 512;
 
 /// pid.codes test VID/PID for CDC-ACM, the pair the rp-hal examples use. Change it before more
 /// than one of these devices exists.

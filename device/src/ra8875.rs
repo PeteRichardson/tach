@@ -44,6 +44,42 @@ pub const CHIP_ID: u8 = 0x75;
 
 /// Row colours, 24-bit RGB, top to bottom: v1's CPU, GPU and MEM colours (code.py, METRICS).
 const ROW_RGB: [u32; 3] = [0x40C0FF, 0x60FF60, 0xFFB040];
+/// Core bar colours, by `Ink::Led` kind: super cores in the CPU row's cyan, performance cores
+/// in violet. The bar's gradient goes up through yellow to red.
+const CORE_RGB: [u32; 2] = [0x40C0FF, 0x9678FF];
+const LED_YELLOW: u32 = 0xFFDC28;
+const LED_RED: u32 = 0xFF281E;
+
+/// `a` to `b` at `t` of 255.
+fn mix(a: u32, b: u32, t: u32) -> u32 {
+    (0..3).fold(0, |rgb, i| {
+        let (x, y) = ((a >> (8 * i)) & 0xFF, (b >> (8 * i)) & 0xFF);
+        rgb | ((x * (255 - t) + y * t) / 255) << (8 * i)
+    })
+}
+
+/// The colour of a core kind. A kind past the table takes the dim colour.
+fn core_rgb(kind: u8) -> u32 {
+    CORE_RGB.get(kind as usize).copied().unwrap_or(DIM_RGB)
+}
+
+/// Where a core bar's gradient reaches the core's bright tone (60 %) and yellow (80 %), of 255.
+const AT_BRIGHT: u32 = 153;
+const AT_YELLOW: u32 = 204;
+
+/// A lit core segment at height `f` of 255: the core's dark tone (about a third) to its bright
+/// tone at 60 %, to yellow at 80 %, to red at 100 %.
+fn led(kind: u8, f: u8) -> u32 {
+    let (rgb, f) = (core_rgb(kind), f as u32);
+    if f < AT_BRIGHT {
+        mix(mix(BACKGROUND_RGB, rgb, 90), rgb, f * 255 / AT_BRIGHT)
+    } else if f < AT_YELLOW {
+        mix(rgb, LED_YELLOW, (f - AT_BRIGHT) * 255 / (AT_YELLOW - AT_BRIGHT))
+    } else {
+        mix(LED_YELLOW, LED_RED, (f - AT_YELLOW) * 255 / (255 - AT_YELLOW))
+    }
+}
+
 /// The dim level: v1's colour for the memory scale.
 const DIM_RGB: u32 = 0x808080;
 const BACKGROUND_RGB: u32 = 0x000000;
@@ -64,6 +100,8 @@ fn colour(ink: Ink) -> u16 {
         Ink::Grid(r) => (row(r) >> 1) & 0x7F7F7F,
         Ink::Fill(r) => (row(r) >> 2) & 0x3F3F3F,
         Ink::Line(r) => row(r),
+        Ink::Led { kind, f } => led(kind, f),
+        Ink::LedOff(kind) => mix(BACKGROUND_RGB, core_rgb(kind), 30),
     })
 }
 
