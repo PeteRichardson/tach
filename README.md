@@ -5,13 +5,16 @@ Mac. It is a Raspberry Pi Pico 2 with an RA8875 driver board and a 4.3"
 480×272 TFT, on one USB cable. The firmware is Rust. The main use is to
 monitor the Mac while it runs local LLMs.
 
-![The Tach display on the RA8875 panel: each row shows a label, a big number and a live chart for CPU, GPU and memory](images/tach-ra8875.jpg)
+![The Tach display on the RA8875 panel: the CPU row shows one LED bar for each core with a peak marker above it, and the GPU and memory rows show live charts](images/tach-ra8875.jpg)
 
-Each row has a big number and a chart. The display draws 30 frames each
+Each row has a big number and a graph. The display draws 30 frames each
 second, and the charts travel smoothly at 12 pixels each second:
 
-- The CPU and GPU charts show the last 32 seconds. Their numbers are the mean
-  of the last second.
+- The CPU row shows one bar for each core. Each bar is a stack of LED
+  segments, lit up to the core's level, with a peak marker that holds the
+  highest recent value and then falls. The number is the mean of all cores.
+- The GPU chart shows the last 32 seconds. Its number is the mean of the last
+  second.
 - The MEM chart shows the last 5 minutes on a compressed time axis. Its right
   edge travels at the same speed as the other charts. Its scale zooms to the
   data, and the limits show at the left of the chart. Memory is "Memory Used",
