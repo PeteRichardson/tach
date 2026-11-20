@@ -87,7 +87,8 @@ run `code.py` against fake display modules, so they need no PyPortal.
 |---|---|
 | The numbers are grey. | The device got no data for 5 seconds. Make sure that `tach-sender.py` runs. |
 | NO FONT at the top of the screen; blocky numbers. | The big font did not load: the file is missing or damaged, or the `adafruit_bitmap_font` library in `lib/` is broken. Copy a BDF font to `/fonts/tach-36.bdf`, then push RESET. |
-| `found only one Adafruit port` | `boot.py` is not on the device, or you did not push RESET after you copied it. |
+| `no Adafruit board has a data port: is boot.py on the device?` | `boot.py` is not on the device, or you did not push RESET after you copied it. |
+| The script says nothing about the port. | No Adafruit board is attached, so the script prints nothing and retries every 2 seconds. Check the cable and the panel power. |
 | The script does not find the device. | Run `ls /dev/cu.usbmodem*`. Give the higher-numbered PyPortal port with `--port`. |
 | Errors on the device | Open the serial console: `screen /dev/cu.usbmodem<lower number> 115200`. To stop `screen`, push Ctrl-A, then K, then Y. |
 
