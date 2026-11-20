@@ -53,6 +53,9 @@ The wiring, the checks before power and the SPI limits are in
 - A Mac with Apple Silicon. The script uses `macmon` for the GPU, which does
   not work on Intel Macs.
 - [Homebrew](https://brew.sh) and [uv](https://docs.astral.sh/uv/).
+- Python 3.11 or later. You do not have to install it: `uv sync` gets the
+  version in `.python-version`. The `python3` from Apple's command line
+  tools is 3.9, which is too old.
 - [rustup](https://rustup.rs). Do not also install Homebrew's `rust`: its
   `cargo` hides rustup's and has no embedded targets.
 
