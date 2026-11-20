@@ -47,7 +47,7 @@ def test_groups_by_location_when_serial_is_none(tach_sender):
             result = tach_sender.find_data_port()
 
     assert result == "/dev/cu.usbmodem14102", (
-        "Expected the higher-numbered device (data port), got {}".format(result)
+        f"Expected the higher-numbered device (data port), got {result}"
     )
 
 

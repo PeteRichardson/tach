@@ -35,9 +35,3 @@ select = [
     "I",   # isort
     "UP",  # pyupgrade
 ]
-ignore = [
-    # .format() is the house style in tach-sender.py. Converting it to
-    # f-strings is issue #29, deliberately kept out of the v1 retirement.
-    # (v1's CircuitPython code, which also needed the ignore, is gone.)
-    "UP032",
-]
