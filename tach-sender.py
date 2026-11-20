@@ -7,8 +7,9 @@ Two devices, one script:
   the script answers with one reply line. CPU comes from Mach ticks, memory from
   host_statistics64(), GPU from `macmon pipe`. See docs/device-v2.md, "Wire".
 - The PyPortal (v1) is pushed to. The script sends one JSON line each
-  SEND_INTERVAL_S to its data port. CPU and GPU come from `macmon pipe`. See
-  pyportal/design.md, sections 5.1, 6.1 and 7.
+  SEND_INTERVAL_S to its data port. CPU and GPU come from `macmon pipe`. v1 is
+  retired and its design notes left the repository; the line format this path
+  writes is pinned by tests/test_message.py.
 
 Both can be connected at once: a thread answers the v2 device while the main
 loop keeps pushing to the PyPortal.
@@ -62,7 +63,7 @@ def log_once(*parts):
         log(*parts)
 
 
-# --- Memory (pyportal/design.md 5.1) ---------------------------------------------------
+# --- Memory (docs/device-v2.md, "Mac-side sources") ----------------------------------------
 
 class VMStatistics64(ctypes.Structure):
     # struct vm_statistics64 from <mach/vm_statistics.h>

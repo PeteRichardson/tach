@@ -125,8 +125,8 @@ pub fn draw_slot(row: &Row, label: &[u8], number: &Number, ink: Ink, mut op: imp
     draw_number(row, number, baseline, ink, &mut op);
 }
 
-/// The memory slot: as `draw_slot`, with the limits of the zoomed y axis (pyportal/design.md 5.2) as
-/// small labels at the right of the slot, the top limit level with the chart's top and the bottom
+/// The memory slot: as `draw_slot`, with the limits of the zoomed y axis (docs/device-v2.md,
+/// "Settled parameters") as small labels at the right of the slot, the top limit level with the chart's top and the bottom
 /// limit level with its bottom. The number moves up to sit between them, so that the curve and the
 /// number never cover a limit. With no limits (no memory in the window) that space stays empty, and
 /// the number keeps its raised place, so it does not jump when the limits come.
