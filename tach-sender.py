@@ -125,7 +125,7 @@ class Memory:
         count = ctypes.c_uint32(ctypes.sizeof(stats) // 4)
         kr = self.libc.host_statistics64(self.host, self.HOST_VM_INFO64, ctypes.byref(stats), ctypes.byref(count))
         if kr != 0:
-            raise OSError("host_statistics64 failed: {}".format(kr))
+            raise OSError(f"host_statistics64 failed: {kr}")
         app = stats.internal_page_count - stats.purgeable_count
         pages = app + stats.wire_count + stats.compressor_page_count
         return pages * self.page_size / GB
@@ -197,7 +197,7 @@ class CpuTicks:
             self.host, self.PROCESSOR_CPU_LOAD_INFO, ctypes.byref(cores), ctypes.byref(info), ctypes.byref(count)
         )
         if kr != 0:
-            raise OSError("host_processor_info failed: {}".format(kr))
+            raise OSError(f"host_processor_info failed: {kr}")
         try:
             out = []
             for core in range(cores.value):
@@ -351,7 +351,7 @@ class Macmon(threading.Thread):
                 if self.restarting:
                     self.restarting = False
                     continue  # set_interval() ended macmon: start again at once
-                log("macmon stopped (exit {}); restarting".format(code))
+                log(f"macmon stopped (exit {code}); restarting")
             except OSError as e:
                 log("cannot run macmon:", e)
             self.stopping.wait(RETRY_S)
@@ -392,7 +392,7 @@ def find_data_port():
     # Prefer a PyPortal. The description is the USB product name.
     candidates.sort(key=lambda ports: "pyportal" not in (ports[0].description or "").lower())
     if len(candidates) > 1:
-        log_once("{} boards have a data port; use --port to select one".format(len(candidates)))
+        log_once(f"{len(candidates)} boards have a data port; use --port to select one")
     # macOS pyserial does not populate p.interface, so the numeric heuristic
     # is the only way to distinguish console from data port: the data
     # interface comes after the console, so its device name has the higher number.
@@ -440,7 +440,7 @@ class SerialSink:
         try:
             self.conn = self.serial.Serial(port, 115200, timeout=0, write_timeout=1)
         except (self.serial.SerialException, OSError) as e:
-            log("cannot open {}: {}".format(port, e))
+            log(f"cannot open {port}: {e}")
             return False
         log("connected to", port)
         return True
@@ -509,7 +509,7 @@ def build_reply(seq, t, cpu, tc, gpu_sample, mem_window, mem_total, cores=None, 
         msg["cpu"] = round(cpu, 1)
         msg["tc"] = tc
         if cores:
-            msg["cores"] = "".join("{:02x}".format(round(p)) for p in cores)
+            msg["cores"] = "".join(f"{round(p):02x}" for p in cores)
             msg["nsuper"] = nsuper
     if gpu_sample is not None:
         msg["gpu"] = round(gpu_sample[0], 1)
@@ -552,7 +552,7 @@ def serve_pulls(port, memory, macmon, cpu_ticks, nsuper):
     try:
         conn = serial.Serial(port, timeout=PULL_WAIT_S, write_timeout=1)
     except (serial.SerialException, OSError) as e:
-        log("cannot open {}: {}".format(port, e))
+        log(f"cannot open {port}: {e}")
         return
     log("connected to", port, "(pull)")
     mem = MemWindow()
