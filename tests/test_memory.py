@@ -4,7 +4,7 @@ The formula is: (internal - purgeable) + wire + compressor
 This matches Activity Monitor's "Memory Used" exactly.
 
 File-backed pages (external_page_count) are deliberately excluded,
-matching Activity Monitor. See pyportal/design.md section 5.1.
+matching Activity Monitor. See docs/device-v2.md, "Mac-side sources".
 
 The numeric tests build Memory through its real __init__ with ctypes.CDLL and
 os.sysconf patched, so the mach-port setup, the argtypes declarations, and the

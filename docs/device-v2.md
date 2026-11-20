@@ -1,7 +1,8 @@
 # Tach device v2 — RA8875 display, RP2350, smooth motion
 
-Status: **running** on the RA8875 panel at 30 fps (2026-11-17). Replaces the PyPortal path in [`../pyportal/design.md`](../pyportal/design.md), which stays
-as the record of v1. Terms: [`../GLOSSARY.md`](../GLOSSARY.md). Decisions:
+Status: **running** on the RA8875 panel at 30 fps (2026-11-17). Replaces the PyPortal path; that
+path and its design notes left the repository at retirement (Q40), so this file is the only design
+record. Terms: [`../GLOSSARY.md`](../GLOSSARY.md). Decisions:
 [`adr/`](adr/). This file is the working brief for the firmware in [`../device/`](../device/).
 Bring-up status: [`../device/BRINGUP.md`](../device/BRINGUP.md).
 
@@ -302,7 +303,7 @@ format both follow from these.
 | Sender language | Keep Python 3 + pyserial (Q38) | measured 26.5 Hz against a 30 Hz request; Python was never the limit |
 | Wire keys | `pull, v, t, hz, cpu, tc, gpu, tg, mem, mem_lo, mem_hi, tm, mem_total, ok` (Q36), plus optional `cores, nsuper` (#46) | unknown keys ignored, as v1 promises; `pull` echoes the request so a late reply is not taken for this one |
 | Issue triage | Deferred until the new device boots; PyPortal-only issues close as superseded (Q40) | avoids closing issues against hardware still in service |
-| v1 archive | CircuitPython code to `legacy/pyportal/` at retirement (Q40) | keeps the repo root for v2 |
+| v1 archive | CircuitPython code deleted at retirement (2026-11-20), not moved to `legacy/` (Q40) | git keeps the source; the repo root carries only v2 |
 
 ## Build steps
 

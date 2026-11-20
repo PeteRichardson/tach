@@ -21,8 +21,10 @@ second, and the charts travel smoothly at 12 pixels each second:
 The design is in [docs/device-v2.md](docs/device-v2.md), with the decisions in
 [docs/adr/](docs/adr/) and the terms in [GLOSSARY.md](GLOSSARY.md).
 
-The first version ran in CircuitPython on an Adafruit PyPortal. It is in
-[pyportal/](pyportal/README.md).
+The first version ran in CircuitPython on an Adafruit PyPortal. It is retired:
+its code and design notes are no longer in this repository. The reasons for the
+replacement are in
+[docs/adr/0001-rp2350-and-rust-for-the-device-firmware.md](docs/adr/0001-rp2350-and-rust-for-the-device-firmware.md).
 
 ## Files
 
@@ -32,7 +34,6 @@ The first version ran in CircuitPython on an Adafruit PyPortal. It is in
 | `tach-sender.py` | Mac | Reads CPU, GPU and memory data, and answers each request from the device. |
 | `launchd/` | Mac | Starts `tach-sender.py` when you log in. |
 | `fonts/` | Mac (build) | The fonts, as BDF files. The firmware build bakes them into the image. |
-| `pyportal/` | PyPortal | Version 1, in CircuitPython. |
 
 ## Hardware
 
@@ -119,7 +120,7 @@ Run these for every change:
 
 ```sh
 cargo test --manifest-path device/host-tests/Cargo.toml   # firmware tests, on the Mac
-uv run pytest                                             # tach-sender.py and pyportal/ tests
+uv run pytest                                             # tach-sender.py tests
 uv run ruff check                                         # Python lint
 ```
 
@@ -143,7 +144,7 @@ the SPI link.
 | The charts are blank. | The device got no reply from the Mac for 5 seconds. Make sure that `tach-sender.py` runs, and that no other program uses the device port. |
 | The panel stays dark. | Look at the FPC ribbon direction in [device/WIRING.md](device/WIRING.md), "Checks before power". |
 | Random shapes on the panel. | SPI writes are lost. Look at the SPI settings in [device/WIRING.md](device/WIRING.md). |
-| The MEM chart does not show the full size of a model. | The LLM runtime maps the model file into memory (mmap). See [pyportal/design.md](pyportal/design.md), section 5.1. |
+| The MEM chart does not show the full size of a model. | The LLM runtime maps the model file into memory (mmap). macOS counts those file-backed pages in `external_page_count`, and `tach-sender.py` follows Activity Monitor in excluding them from "Memory Used". See [docs/device-v2.md](docs/device-v2.md), "Mac-side sources". |
 
 ## License
 

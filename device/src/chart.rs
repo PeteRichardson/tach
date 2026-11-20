@@ -9,7 +9,7 @@
 //! comes from the clock, not from the arrival of samples.
 //!
 //! CPU and GPU use a linear axis of `TRAVEL_PX_PER_S`. Memory uses a compressed axis of 5 minutes
-//! (pyportal/design.md 5.2, `Axis`): its right edge travels at the same speed, so one speed holds across
+//! (docs/device-v2.md, "Settled parameters", and `Axis` below): its right edge travels at the same speed, so one speed holds across
 //! the screen, and further left each column covers more time.
 
 use crate::layout::{Row, GRID_TICK_S, TRAVEL_PX_PER_S};
@@ -46,8 +46,8 @@ pub const GAP_MS: u64 = 1500;
 /// * When no reply came for this long, there is no Mac time to draw at, and the panel blanks
 ///   instead of freezing (ADR-0005, ADR-0006).
 ///
-/// 5 s, the same as v1 (`STALE_NS` in code.py) and macmon's limit in tach-sender.py
-/// (`MACMON_STALE_S`), so all three say one thing (issue #27).
+/// 5 s, to match macmon's limit in tach-sender.py (`MACMON_STALE_S`), so the two live limits
+/// say one thing (issue #27). v1 used the same 5 s as `STALE_NS`; v1 is retired.
 pub const STALE_MS: u64 = 5000;
 
 /// Time constant of a core bar's smoothing: short, so the bars move like a meter, not a chart.
@@ -503,7 +503,7 @@ impl Curve {
     }
 }
 
-/// The memory row's compressed time axis (pyportal/design.md 5.2). Column `x` counts from the right edge,
+/// The memory row's compressed time axis (docs/device-v2.md, "Settled parameters"). Column `x` counts from the right edge,
 /// and its age grows as `b * (e^(x / b) - 1)` pixels of travel: one pixel per pixel at the right
 /// edge, so the newest memory travels at `TRAVEL_PX_PER_S` like the other rows, and `b` is chosen
 /// so the left edge is `MEM_WINDOW_MS` old. On the 400 px panel the left column covers about 4 s.
@@ -547,7 +547,7 @@ impl Axis {
     }
 }
 
-/// The memory scale steps, in GB (pyportal/design.md 5.2). The scale is rounded out to the first step that
+/// The memory scale steps, in GB. The scale is rounded out to the first step that
 /// gives 5 steps or less, so it does not move on every frame.
 const MEM_STEPS_GB: [f32; 10] = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0];
 /// The smallest span of the memory scale, so that noise does not look large.

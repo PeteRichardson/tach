@@ -42,7 +42,7 @@ pub const HEIGHT: u16 = 272;
 /// The value of register 0x00 on a live RA8875.
 pub const CHIP_ID: u8 = 0x75;
 
-/// Row colours, 24-bit RGB, top to bottom: v1's CPU, GPU and MEM colours (code.py, METRICS).
+/// Row colours, 24-bit RGB, top to bottom: the v1 CPU, GPU and MEM colours (v1's METRICS).
 const ROW_RGB: [u32; 3] = [0x40C0FF, 0x60FF60, 0xFFB040];
 /// Core bar colours, by `Ink::Led` kind: super cores in the CPU row's cyan, performance cores
 /// in violet. The bar's gradient goes up through yellow to red.
